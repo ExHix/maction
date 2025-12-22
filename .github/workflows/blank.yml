@@ -26,7 +26,7 @@ jobs:
 
       - name: Pull pre-built macOS Image
         # 获取一个已经配置好的轻量级 macOS 镜像 (Sequoia)
-        run: tart pull ghcr.io/cirruslabs/macos-sonoma-vanilla:latest
+        run: tart pull ghcr.io/cirruslabs/macos-sonoma-vanilla:latest my_vm
 
       - name: Run Script inside VM
         run: |
@@ -43,4 +43,4 @@ jobs:
 
           # 使用 tart 运行虚拟机并执行脚本
           # 注意：在 CI 中运行 VM 非常消耗资源，可能会很慢
-          tart run ghcr.io/cirruslabs/macos-sonoma-vanilla:latest --command "bash" < guest_script.sh
+          tart run my_vm --command "bash" < guest_script.sh
