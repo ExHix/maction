@@ -1,110 +1,75 @@
-name: Run Linux VM (Software Emulation)
-
-on:
-  push:
-  workflow_dispatch:
+name: Playwright Remote Debugging
+on: 
+  workflow_dispatch: # 仅支持手动触发
 
 jobs:
-  run-linux-vm-emulated:
-    runs-on: macos-15
-    # 移除了 timeout-minutes，防止因软件模拟过慢被强制结束
-
+  debug-session:
+    runs-on: ubuntu-latest
+    # 使用官方 Playwright Docker 镜像
+    container:
+      image: mcr.microsoft.com/playwright:v1.40.0-jammy
+    
     steps:
-      - name: Free up disk space
-        # 清理 macOS Runner 上预装的庞大开发工具以腾出空间
-        run: |
-          echo "Disk space before cleanup:"
-          df -h /
-          
-          # 删除预装的 Xcode 版本（保留默认连接的除外，但这里为了最大化空间尝试删除旧的）
-          # sudo rm -rf /Applications/Xcode*
-          
-          # 删除 Android SDKs
-          sudo rm -rf /Users/runner/Library/Android/sdk
-          
-          # 删除 .NET, Haskell, CodeQL 等预装库
-          sudo rm -rf /Users/runner/.dotnet
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/pipx
-          
-          echo "Disk space after cleanup:"
-          df -h /
-
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install QEMU and Expect
+      - name: Install Utilities
+        run: apt-get update && apt-get install -y curl
+
+      # 1. 获取公网 IP (Localtunnel 安全验证需要用到)
+      - name: Get Public IP
+        id: public_ip
         run: |
-          brew update
-          # 安装 QEMU 和 Expect
-          brew install qemu expect
+          IP=$(curl -s https://api.ipify.org)
+          echo "Runer Public IP: $IP"
+          echo "ip=$IP" >> $GITHUB_OUTPUT
 
-      - name: Download Alpine Linux AArch64 (Virt ISO)
+      # 2. 启动 Playwright Server (后台运行)
+      - name: Start Playwright Server
         run: |
-          # 继续使用 Alpine Linux，因为它的体积小，在软件模拟模式下启动成功率最高
-          ISO_URL="https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-virt-3.21.0-aarch64.iso"
-          wget -O alpine.iso "$ISO_URL"
+          # 启动 Playwright Server 监听 9222 端口
+          # --host 0.0.0.0 允许外部容器访问
+          nohup npx playwright launch-server --port 9222 --host 0.0.0.0 &
+          
+          # 等待服务启动
+          sleep 3
+          echo "Playwright Server started on port 9222"
 
-      - name: Run VM with Software Emulation (TCG)
+      # 3. 开启内网穿透并打印连接命令
+      - name: Start Tunnel & Print Connection Command
+        env:
+          RUNNER_IP: ${{ steps.public_ip.outputs.ip }}
         run: |
-          # 创建 expect 脚本
-          cat <<EOF > run_vm.exp
-          #!/usr/bin/expect -f
-          
-          # --- 重要：取消超时限制 ---
-          # 软件模拟非常慢，我们将 timeout 设置为 -1 (无限等待)，或者设置一个极大的值
-          set timeout -1
+          # 安装 localtunnel
+          npm install -g localtunnel
 
-          # 启动 QEMU
-          # -accel tcg: 强制使用软件模拟 (Tiny Code Generator)
-          # -cpu max: 使用 QEMU 支持的最佳特性（软件模拟下比 host 兼容性更好）
-          # -smp 1: 软件模拟下，多核通常不会带来性能提升，反而增加调度开销，建议单核
-          spawn qemu-system-aarch64 \
-            -machine virt,accel=tcg \
-            -cpu max \
-            -smp 1 \
-            -m 2048 \
-            -nographic \
-            -cdrom alpine.iso \
-            -netdev user,id=n1 -device virtio-net-pci,netdev=n1
+          # 启动 tunnel (后台运行) 并将日志输出到文件以便提取 URL
+          lt --port 9222 > tunnel.log 2>&1 &
+          
+          echo "Waiting for tunnel URL..."
+          sleep 5
+          
+          # 提取 URL
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.loca\.lt" tunnel.log | head -1)
+          
+          # 将 https 替换为 wss (Playwright 连接通常使用 ws/wss)
+          WS_ENDPOINT="${TUNNEL_URL/https/wss}/ws"
 
-          # 打印一条日志提示用户正在等待
-          puts "VM started in software emulation mode. This will be slow. Waiting for login prompt..."
+          echo "=========================================================="
+          echo "🎉 远程调试环境已就绪！"
+          echo ""
+          echo "⚠️  注意: 由于 Localtunnel 的安全机制，你首次访问可能需要验证 IP。"
+          echo "👉  GitHub Runner 公网 IP: $RUNNER_IP"
+          echo "👉  验证页面 (浏览器打开): $TUNNEL_URL"
+          echo ""
+          echo "💻  在本地终端运行以下命令连接调试:"
+          echo "----------------------------------------------------------"
+          echo "npx playwright connect --ws-endpoint=\"$WS_ENDPOINT\""
+          echo "----------------------------------------------------------"
+          echo "=========================================================="
 
-          # 等待登录提示 (localhost login:)
-          expect "localhost login:"
-          
-          # 发送用户名
-          send "root\r"
-          
-          # 等待 Shell
-          expect "#"
-          
-          # --- 执行命令 ---
-          
-          send "echo '----------------------------------------'\r"
-          send "echo 'System Info (Inside VM)'\r"
-          
-          # 打印内核版本
-          send "uname -a\r"
-          
-          # 打印 CPU 信息 (注意查看是否显示为 TCG 或 QEMU virtual CPU)
-          send "cat /proc/cpuinfo | grep 'model name' | head -n 1\r"
-          
-          # 打印内存信息
-          send "free -h\r"
-          
-          send "echo '----------------------------------------'\r"
-          
-          # 关机
-          send "poweroff\r"
-          
-          # 等待关机完成
-          expect eof
-          EOF
-
-          chmod +x run_vm.exp
-          
-          # 使用 time 命令记录整个过程耗时
-          time ./run_vm.exp
+      # 4. 保持运行 10 分钟
+      - name: Keep Alive for 10 Minutes
+        run: |
+          echo "Session will close in 10 minutes..."
+          sleep 600
