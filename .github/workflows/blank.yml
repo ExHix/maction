@@ -13,7 +13,7 @@ jobs:
           echo "清理前空间:"
           df -h
           sudo rm -rf /Users/runner/Library/Android/sdk
-          sudo rm -rf /Library/Developer/CommandLineTools
+          # sudo rm -rf /Library/Developer/CommandLineTools
           sudo rm -rf /Applications/Xcode* # 极其危险但能腾出巨大空间
           echo "清理后空间:"
           df -h
