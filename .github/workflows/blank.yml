@@ -1,81 +1,99 @@
-name: CF-Bypass Desktop (Final Fix)
+name: Firefox Stealth VNC
 on: 
   workflow_dispatch:
 
 jobs:
-  bypass-cf:
+  firefox-desktop:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+      # Firefox 需要 shm-size 防止崩溃
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 补全所有缺失的系统组件
-      - name: Install System Dependencies
+      # 1. 安装基础工具 & 添加 Firefox PPA 源 (避开 Snap 坑)
+      - name: Install Firefox & GUI
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装基础工具、debconf、fontconfig(提供fc-cache)、以及Chrome需要的dbus等
-          apt-get install -y \
-            debconf-utils \
-            git \
-            wget \
-            curl \
-            net-tools \
-            python3 \
-            python3-pip \
-            sudo \
-            software-properties-common \
-            fontconfig \
-            dbus-x11 \
-            libnss3 \
-            libasound2 \
-            libgbm1 \
-            ca-certificates
-
-      # 2. 安装字体 (独立步骤)
-      - name: Install Fonts (Anti-Detect)
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          # 预先同意微软字体协议
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils
+          
+          # 添加 Mozilla PPA 以获取原生 .deb 包
+          add-apt-repository -y ppa:mozillateam/ppa
+          
+          # 设置优先级，确保不安装 Snap 版本
+          echo '
+          Package: *
+          Pin: release o=LP-PPA-mozillateam
+          Pin-Priority: 1001
+          ' | tee /etc/apt/preferences.d/mozilla-firefox
+          
+          apt-get update
+          # 安装 Firefox 和 常用中文字体/微软字体
+          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer
+          
+          # 安装 VNC 环境
+          apt-get install -y xvfb fluxbox x11vnc python3
+          
+          # 接受微软字体协议 (防止报错)
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
-          
-          # 安装字体包
-          apt-get install -y ttf-mscorefonts-installer fonts-liberation fonts-noto-color-emoji || echo "Font install warning"
-          
-          # 现在 fc-cache 肯定存在了
+          # 重新配置字体
           fc-cache -f -v
 
-      # 3. 安装 Chrome 和 GUI 环境
-      - name: Install Chrome & GUI & DrissionPage
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          apt-get install -y xvfb fluxbox x11vnc
-          
-          # 安装官方 Google Chrome
-          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          apt-get install -y ./google-chrome-stable_current_amd64.deb
-          
-          # 安装 DrissionPage 及其依赖
-          pip3 install DrissionPage
-
-      # 4. 安装 noVNC
+      # 2. 安装 noVNC
       - name: Install noVNC
         run: |
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
 
+      # 3. 配置 Firefox 隐身 Profile (核心反爬)
+      - name: Configure Firefox Profile
+        run: |
+          # 创建 Profile 文件夹
+          mkdir -p /root/.mozilla/firefox/stealth.default
+          
+          # 创建 profiles.ini 告诉 Firefox 使用这个目录
+          cat <<EOF > /root/.mozilla/firefox/profiles.ini
+          [Profile0]
+          Name=default
+          IsRelative=1
+          Path=stealth.default
+          Default=1
+          
+          [General]
+          StartWithLastProfile=1
+          Version=2
+          EOF
+          
+          # 写入 user.js (Firefox 的高级配置)
+          # 这里的设置对应了 about:config 中的开关
+          cat <<EOF > /root/.mozilla/firefox/stealth.default/user.js
+          // === 核心反爬设置 ===
+          user_pref("dom.webdriver.enabled", false);           // 彻底关闭 WebDriver 标记
+          user_pref("use_automation_extension", false);        // 禁用自动化扩展支持
+          user_pref("general.useragent.override", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"); // 伪装 Win10
+          
+          // === 隐私与指纹 ===
+          user_pref("media.peerconnection.enabled", false);    // 禁用 WebRTC，防止 IP 泄露
+          user_pref("privacy.resistFingerprinting", false);    // 注意：有时候开启这个反而会被 CF 标记，先保持 false 模拟普通人
+          user_pref("network.http.sendRefererHeader", 2);      // 正常发送 Referer
+          
+          // === 性能与显示 ===
+          user_pref("browser.tabs.remote.autostart", true);
+          user_pref("gfx.webrender.all", false);               // 容器内禁用部分硬件加速防止黑屏
+          EOF
+
+      # 4. 启动桌面环境
       - name: Start Virtual Desktop
         run: |
-          # 启动 DBUS (有些版本的 Chrome 需要它来保存设置)
-          service dbus start || true
+          # 启动 DBUS (Firefox 需要)
+          mkdir -p /var/run/dbus
+          dbus-daemon --system --fork
           
           Xvfb :99 -screen 0 1280x800x24 &
           export DISPLAY=:99
@@ -84,57 +102,34 @@ jobs:
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           sleep 3
 
-      - name: Create Bypass Script
-        run: |
-          cat <<EOF > bypass.py
-          from DrissionPage import ChromiumPage, ChromiumOptions
-          import time
-          
-          co = ChromiumOptions()
-          co.set_browser_path('/usr/bin/google-chrome') 
-          co.set_argument('--no-sandbox')
-          co.set_argument('--start-maximized')
-          co.set_argument('--disable-gpu')
-          co.set_user_data_path('/tmp/drission_profile')
-          
-          # 模拟最新版 Mac Chrome
-          co.set_user_agent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
-
-          try:
-              page = ChromiumPage(addr_or_opts=co)
-              # 替换成你的目标 URL
-              target_url = "https://nowsecure.nl" 
-              print(f"--- Navigating to {target_url} ---")
-              page.get(target_url)
-              
-              print("--- Ready. Please control via VNC. ---")
-              while True:
-                  time.sleep(10)
-          except Exception as e:
-              print(f"Error: {e}")
-              while True:
-                  time.sleep(10)
-          EOF
-
-      - name: Run DrissionPage & Tunnel
+      # 5. 启动 Firefox 并建立隧道
+      - name: Launch Firefox & Tunnel
         run: |
           export DISPLAY=:99
           
-          # 启动浏览器脚本
-          python3 bypass.py > browser.log 2>&1 &
+          # 启动 Firefox (后台运行)
+          # --no-remote: 允许同时运行多个实例
+          # --new-instance: 确保启动新进程
+          nohup firefox --no-remote --new-instance "https://nowsecure.nl" > firefox.log 2>&1 &
           
-          # 启动隧道
+          echo "Firefox launching..."
+          sleep 5
+          
+          # 启动 Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Starting Tunnel..."
+          echo "Waiting for Tunnel..."
           sleep 10
           
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "🔗 VNC 地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "🦊 Firefox 隐身版已就绪"
+          echo "👉 这个版本强制关闭了 webdriver 标记并伪装为 Windows"
+          echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
           
-          tail -f browser.log
+          # 保持运行
+          tail -f firefox.log
