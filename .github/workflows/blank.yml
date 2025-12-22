@@ -1,4 +1,4 @@
-name: Firefox Non-Root VNC
+name: Firefox Allowed-Ads VNC
 on: 
   workflow_dispatch:
 
@@ -7,14 +7,13 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 必须开启 privileged 以支持 fuse (虽然不用 snap，但为了底层库稳定)
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 (root 操作)
+      # 1. 安装基础环境
       - name: Install System & Firefox
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -22,10 +21,8 @@ jobs:
           apt-get update
           apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim
           
-          # 添加 Mozilla PPA
           add-apt-repository -y ppa:mozillateam/ppa
           
-          # 阻止 Snap 版本
           echo '
           Package: *
           Pin: release o=LP-PPA-mozillateam
@@ -33,36 +30,23 @@ jobs:
           ' | tee /etc/apt/preferences.d/mozilla-firefox
           
           apt-get update
-          # 安装 Firefox, VNC, 字体, PulseAudio(解决声音报错)
           apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer xvfb fluxbox x11vnc python3 pulseaudio dbus-x11
           
-          # 同意字体协议
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
           
-          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-          
-          # 赋予 noVNC 目录权限，以便普通用户访问
           chmod -R 777 /opt/noVNC
 
-      # 2. 创建普通用户并配置 Firefox (关键修复步骤)
+      # 2. 创建用户 & 配置“允许广告”的 Profile
       - name: Setup User & Firefox Profile
         run: |
-          # 创建一个叫 appuser 的用户，主目录在 /home/appuser
           useradd -m -s /bin/bash appuser
           
-          # 赋予 sudo 权限 (可选，调试用)
-          usermod -aG sudo appuser
-          echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-          
-          # 以 appuser 身份创建配置目录
-          # 使用 su -c 确保文件归属正确
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
-          # 写入 profiles.ini
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
           [Profile0]
           Name=default
@@ -75,73 +59,70 @@ jobs:
           Version=2
           EOF"
           
-          # 写入 user.js (反爬配置)
+          # 核心修改：写入允许广告和追踪的 user.js
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
+          // 1. 基础反爬 (保持不变)
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
+          
+          // 2. 必须禁用的隐私保护 (修复 AdBlock 检测)
+          // 关闭增强跟踪保护
+          user_pref(\"privacy.trackingprotection.enabled\", false);
+          user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
+          user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
+          user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
+          user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
+          
+          // 允许所有 Cookie (很多广告依赖第三方 Cookie)
+          user_pref(\"network.cookie.cookieBehavior\", 0); // 0 = Accept all
+          user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
+          
+          // 3. 其他可能触发检测的设置
+          user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
+          user_pref(\"dom.disable_open_during_load\", false); // 允许弹窗 (有些广告是弹窗)
+          
+          // 4. 保持 WebRTC 关闭 (防止 IP 泄露，如果广告一定需要 WebRTC 才能加载，这里可能需要改回 true)
           user_pref(\"media.peerconnection.enabled\", false);
-          user_pref(\"privacy.resistFingerprinting\", false);
-          user_pref(\"gfx.webrender.all\", false);
           EOF"
 
-      # 3. 启动 VNC 和 桌面环境 (以 appuser 身份)
+      # 3. 启动桌面
       - name: Start Desktop (As User)
         run: |
-          # 启动系统级 DBus (root运行)
           service dbus start || true
           
-          # 创建启动脚本 run_desktop.sh
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
-          # 启动 Xvfb
           Xvfb :99 -screen 0 1280x800x24 &
           sleep 2
-          
-          # 启动 Fluxbox
           fluxbox &
-          
-          # 启动 VNC Server
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
-          
-          # 启动 noVNC
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
-          # 赋予脚本执行权限
           chmod +x /home/appuser/run_desktop.sh
-          
-          # 以 appuser 身份运行桌面
           su appuser -c "/home/appuser/run_desktop.sh"
-          
-          echo "Desktop started as appuser."
           sleep 3
 
-      # 4. 启动 Firefox (以 appuser 身份)
+      # 4. 启动 Firefox
       - name: Launch Firefox & Tunnel
         run: |
-          # 创建浏览器启动脚本
           cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
-          # 启动 Firefox
+          # 替换成你的目标网址
           nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710/" > /home/appuser/firefox.log 2>&1 &
           EOF
           
           chmod +x /home/appuser/run_firefox.sh
-          
-          # 以 appuser 身份运行
           su appuser -c "/home/appuser/run_firefox.sh"
           
           echo "Firefox launching..."
           sleep 5
           
-          # 启动 Tunnel (Tunnel 可以用 root 跑，只要它能访问 localhost:6080)
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
@@ -152,9 +133,8 @@ jobs:
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "🦊 Firefox (User Mode) 已启动"
+          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
           
-          # 监控日志
           tail -f /home/appuser/firefox.log
