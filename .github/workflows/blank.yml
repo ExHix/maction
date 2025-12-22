@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Install Tart
-        run: brew install tart
+        run: brew install cirruslabs/cli/tart
 
       - name: Pull pre-built macOS Image
         # 获取一个已经配置好的轻量级 macOS 镜像 (Sequoia)
@@ -33,4 +33,4 @@ jobs:
 
           # 使用 tart 运行虚拟机并执行脚本
           # 注意：在 CI 中运行 VM 非常消耗资源，可能会很慢
-          tart run ghcr.io/cirruslabs/macos-sequia-vanilla:latest --command "bash" < guest_script.sh
+          tart run ghcr.io/cirruslabs/macos-sequoia-vanilla:15.1 --command "bash" < guest_script.sh
