@@ -1,75 +1,95 @@
-name: Playwright Remote Debugging
+name: Playwright Web VNC (Browser Remote Control)
 on: 
   workflow_dispatch:
 
 jobs:
-  debug-session:
+  browser-gui:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.40.0-jammy
+      # 需要共享内存以避免浏览器崩溃
+      options: --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Utilities
-        run: apt-get update && apt-get install -y curl
+      - name: Install GUI & VNC Tools
+        run: |
+          apt-get update
+          # 安装 X11, 窗口管理器, VNC server, 和 Python (noVNC 需要)
+          apt-get install -y xvfb fluxbox x11vnc python3 python3-pip git net-tools
+          
+          # 下载 noVNC (Web版 VNC 客户端)
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
+          
+          # 生成一个简单的 html 入口，自动连接
+          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
 
-      - name: Get Public IP
+      - name: Get Public IP (For Tunnel Auth)
         id: public_ip
         run: |
           IP=$(curl -s https://api.ipify.org)
-          echo "Runer Public IP: $IP"
+          echo "Runner Public IP: $IP"
           echo "ip=$IP" >> $GITHUB_OUTPUT
 
-      - name: Start Playwright Server
+      - name: Start Desktop Environment
         run: |
-          # 启动 Playwright Server 监听 9222 端口
-          nohup npx playwright launch-server --port 9222 --host 0.0.0.0 &
-          sleep 3
-          echo "Playwright Server started on port 9222"
+          # 1. 启动虚拟屏幕 :99
+          Xvfb :99 -screen 0 1280x720x24 &
+          export DISPLAY=:99
+          
+          # 2. 启动窗口管理器 (不然浏览器没法拖动/最大化)
+          fluxbox &
+          
+          # 3. 启动 VNC Server (设置密码为 secret)
+          x11vnc -display :99 -forever -passwd secret -bg
+          
+          # 4. 启动 noVNC (将 VNC 转为 Web 流量，端口 6080)
+          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+          
+          echo "Desktop environment started."
 
-      - name: Start Tunnel & Print Connection Command
+      - name: Launch Browser (Visual Mode)
+        run: |
+          export DISPLAY=:99
+          
+          # 这里我们启动 Playwright 的 Codegen 模式，或者直接启动 Chromium
+          # Codegen 模式最好，因为它会同时打开一个浏览器和一个代码生成窗口，方便你调试
+          nohup npx playwright codegen wikipedia.org &
+          
+          echo "Browser launched in background."
+
+      - name: Start Tunnel & Show Link
         env:
           RUNNER_IP: ${{ steps.public_ip.outputs.ip }}
         run: |
           npm install -g localtunnel
 
-          # 启动 tunnel 并输出日志到文件
-          lt --port 9222 > tunnel.log 2>&1 &
+          # 穿透 6080 端口 (noVNC 的 Web 端口)
+          lt --port 6080 > tunnel.log 2>&1 &
           
           echo "Waiting for tunnel URL..."
           sleep 5
           
-          # 提取 URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.loca\.lt" tunnel.log | head -1)
           
           if [ -z "$TUNNEL_URL" ]; then
-            echo "Error: Failed to get tunnel URL. Printing log:"
+            echo "Error: Failed to get tunnel URL."
             cat tunnel.log
             exit 1
           fi
 
-          # --- 修复点在这里 ---
-          # 使用 sed 替换 https 为 wss，兼容 sh/dash shell
-          WS_BASE=$(echo "$TUNNEL_URL" | sed 's/https/wss/')
-          WS_ENDPOINT="${WS_BASE}/ws"
-          # ------------------
-
           echo "=========================================================="
-          echo "🎉 远程调试环境已就绪！"
+          echo "🖥️  浏览器远程桌面已就绪！"
           echo ""
-          echo "⚠️  注意: 必须先在浏览器打开下方链接并输入 IP 进行验证！"
-          echo "👉  GitHub Runner 公网 IP: $RUNNER_IP"
-          echo "👉  验证页面 (浏览器打开): $TUNNEL_URL"
+          echo "1️⃣  验证 IP: 必须先打开链接输入下方 IP"
+          echo "👉  GitHub Runner IP: $RUNNER_IP"
           echo ""
-          echo "💻  本地连接命令:"
-          echo "----------------------------------------------------------"
-          echo "npx playwright connect --ws-endpoint=\"$WS_ENDPOINT\""
-          echo "----------------------------------------------------------"
+          echo "2️⃣  访问地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "    (如果点击后白屏，请点击左侧侧边栏 -> Settings -> Scaling Mode -> Local Scaling)"
           echo "=========================================================="
 
-      - name: Keep Alive for 10 Minutes
-        run: |
-          echo "Session will close in 10 minutes..."
-          sleep 600
+      - name: Keep Alive (20 min)
+        run: sleep 1200
