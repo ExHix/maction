@@ -1,34 +1,29 @@
-name: Windows RDP Crawler (Native)
+name: Windows RDP Crawler (Fixed)
 on: 
   workflow_dispatch:
 
 jobs:
   win-rdp:
-    runs-on: windows-latest # 使用原生 Windows Server 2022
+    runs-on: windows-latest
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. 设置用户密码 (RDP 登录需要)
       - name: Set User Password
-        id: reset-pass
         shell: powershell
         run: |
-          $password = "SecretPass123!" # <--- 你的 RDP 密码
+          $password = "SecretPass123!"
           net user runneradmin $password
           echo "Password set successfully."
 
-      # 2. 安装 Playwright 和 Python
       - name: Install Python & Playwright
         shell: powershell
         run: |
           pip install playwright
           playwright install chromium
-          # 也是为了防止找不到浏览器，安装一下
           python -m playwright install chromium
 
-      # 3. 创建启动脚本 (自动打开 Chrome)
       - name: Create Python Script
         shell: powershell
         run: |
@@ -37,31 +32,29 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           print('--- Starting Windows Chrome ---')
-          with sync_playwright() as p:
-              # Windows 上不需要 sandbox 参数，环境更真实
-              browser = p.chromium.launch(
-                  headless=False,
-                  channel="chrome", # 尝试调用系统 Chrome (如果有) 或 bundled chromium
-                  args=["--start-maximized"]
-              )
-              context = browser.new_context(viewport=None)
-              page = context.new_page()
-              
-              print('--- Navigating... ---')
-              try:
-                  page.goto("https://www.google.com")
-              except:
-                  pass
-              
-              print('--- Browser Ready. Connect via RDP to control. ---')
-              
-              # 死循环保持运行
+          try:
+              with sync_playwright() as p:
+                  # 启动 Chrome
+                  browser = p.chromium.launch(headless=False, args=["--start-maximized"])
+                  context = browser.new_context(viewport=None)
+                  page = context.new_page()
+                  
+                  print('--- Navigating to Google... ---')
+                  try:
+                      page.goto("https://www.google.com")
+                  except:
+                      pass
+                  
+                  print('--- Browser Ready. Keep Alive... ---')
+                  while True:
+                      time.sleep(10)
+          except Exception as e:
+              print(f"Error: {e}")
               while True:
-                  time.sleep(10)
+                   time.sleep(10)
           "@
           Set-Content -Path run_win.py -Value $scriptContent
 
-      # 4. 开启 RDP 访问权限
       - name: Enable RDP Access
         shell: powershell
         run: |
@@ -69,48 +62,64 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 1
 
-      # 5. 启动 Ngrok TCP 隧道 (暴露 3389 端口)
-      - name: Start Ngrok Tunnel
+      # --- 关键修复部分开始 ---
+      - name: Start Ngrok Tunnel (With Retry)
         shell: powershell
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
           if ($env:NGROK_AUTH_TOKEN -eq "") {
-            Write-Error "请先在 GitHub Secrets 中配置 NGROK_AUTH_TOKEN"
+            Write-Error "❌ 错误: 请先在 GitHub Secrets 中配置 NGROK_AUTH_TOKEN"
             exit 1
           }
           
           # 下载 Ngrok
           Invoke-WebRequest -Uri https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip -DestinationPath .
+          Expand-Archive ngrok.zip -DestinationPath . -Force
           
           # 配置 Token
           .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
           
-          # 后台启动 TCP 隧道
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -PassThru
+          # 启动 Ngrok 并将日志输出到文件
+          # 使用 --log=stdout 确保日志被写入文件
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -RedirectStandardOutput ngrok.log -RedirectStandardError ngrok.log -WindowStyle Hidden -PassThru
           
-          # 等待启动
-          Start-Sleep -Seconds 5
+          Write-Host "Waiting for Ngrok tunnel to initialize..."
           
-          # 获取公网地址
-          $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
-          $url = $tunnels.tunnels[0].public_url
+          # 循环重试获取 URL (最多尝试 20 次，每次 1 秒)
+          $url = $null
+          for ($i=1; $i -le 20; $i++) {
+            try {
+              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
+              $url = $response.tunnels[0].public_url
+              if ($url) { break }
+            } catch {
+              Write-Host "Attempt $i: Ngrok API not ready yet..."
+              Start-Sleep -Seconds 1
+            }
+          }
+
+          if (-not $url) {
+            Write-Error "❌ 无法获取隧道 URL。Ngrok 可能启动失败。"
+            Write-Host "=== Ngrok Log Content ==="
+            Get-Content ngrok.log
+            exit 1
+          }
           
-          # 去掉 tcp:// 前缀
+          # 清理 URL 前缀
           $cleanUrl = $url -replace "tcp://", ""
           
           Write-Host "======================================================"
-          Write-Host "🖥️ Windows 远程桌面 (RDP) 已就绪"
+          Write-Host "✅ Windows RDP 启动成功！"
           Write-Host ""
-          Write-Host "👉 连接地址: $cleanUrl"
-          Write-Host "👉 用户名: runneradmin"
-          Write-Host "👉 密码: SecretPass123!"
+          Write-Host "👉 连接地址 (Computer): $cleanUrl"
+          Write-Host "👉 用户名 (User): runneradmin"
+          Write-Host "👉 密码 (Password): SecretPass123!"
           Write-Host ""
-          Write-Host "💡 使用方法: 电脑/手机打开 '远程桌面' 客户端，输入地址连接。"
+          Write-Host "⚠️ 注意: 如果连接失败，请检查你的 Ngrok 账号是否已验证邮箱 (TCP隧道需要验证)。"
           Write-Host "======================================================"
+      # --- 关键修复部分结束 ---
 
-      # 6. 运行浏览器脚本 (保持 Session 活跃)
       - name: Run Browser & Keep Alive
         shell: powershell
         run: |
