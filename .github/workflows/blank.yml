@@ -1,9 +1,9 @@
-name: Debug Playwright VNC (Fixed)
+name: Fake-Mac Crawler Desktop
 on: 
   workflow_dispatch:
 
 jobs:
-  debug-browser:
+  stealth-browser:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.40.0-jammy
@@ -13,105 +13,110 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Dependencies & Python Playwright
+      - name: Install Fonts & Tools (反爬关键)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装系统工具
+          # 安装常用工具
           apt-get install -y xvfb fluxbox x11vnc python3 python3-pip git net-tools curl ca-certificates procps
           
-          # 关键修复：安装 Python 版 Playwright
-          pip3 install playwright
+          # [关键步骤] 安装微软核心字体和常用字体，防止因字体缺失被识别为 Linux 机器人
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
+          apt-get install -y --no-install-recommends ttf-mscorefonts-installer fonts-liberation fonts-noto-color-emoji fonts-freefont-ttf
           
-          # 确保安装了匹配的浏览器内核 (防止版本不匹配报错)
+          # 刷新字体缓存
+          fc-cache -f -v
+          
+          # 安装环境依赖
+          pip3 install playwright
           python3 -m playwright install chromium
           
-          # 安装 noVNC
+          # 安装 Web VNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
 
-      - name: Setup Python Script
+      - name: Create Stealth Browser Script
         run: |
-          cat <<EOF > run_browser.py
+          cat <<EOF > run_stealth.py
           import sys
           import time
           from playwright.sync_api import sync_playwright
 
-          print("--- [PYTHON] Script started ---")
+          # 伪装成 macOS 的 User Agent
+          MAC_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+          print("--- [STEALTH] Starting Stealth Browser... ---")
           try:
               with sync_playwright() as p:
-                  print("--- [PYTHON] Launching Chromium... ---")
-                  # 注意：这里去掉了 executable_path，让它使用 playwright install 下载的版本，最稳妥
-                  browser = p.chromium.launch(
+                  # 使用 launch_persistent_context 模拟真实用户数据目录
+                  # 这比普通的 launch 更难被检测
+                  user_data_dir = "/tmp/chrome_user_data"
+                  
+                  browser = p.chromium.launch_persistent_context(
+                      user_data_dir,
                       headless=False,
+                      user_agent=MAC_USER_AGENT, # 1. 伪装 UA
+                      viewport=None,             # 2. 禁用默认 Viewport
+                      locale="en-US",            # 3. 设置语言环境
+                      timezone_id="America/New_York", # 4. 伪装时区 (可选)
                       args=[
                           "--start-maximized",
                           "--no-sandbox",
                           "--disable-setuid-sandbox",
                           "--disable-dev-shm-usage",
-                          "--disable-gpu" 
+                          "--disable-gpu",
+                          # 5. [核心反爬] 禁用自动化控制特性
+                          "--disable-blink-features=AutomationControlled", 
+                          "--disable-infobars"
                       ]
                   )
-                  print("--- [PYTHON] Browser launched object created ---")
                   
-                  # 使用 None viewport 配合 start-maximized 实现全屏
-                  context = browser.new_context(viewport=None)
-                  page = context.new_page()
+                  page = browser.pages[0]
                   
-                  print("--- [PYTHON] Navigating to Google... ---")
-                  page.goto("https://www.google.com")
-                  print("--- [PYTHON] Page Title:", page.title())
-                  
-                  # 截图验证
-                  page.screenshot(path="debug_screenshot.png")
-                  print("--- [PYTHON] Screenshot taken ---")
+                  # 6. [核心反爬] 注入脚本，抹除 WebDriver 痕迹
+                  page.add_init_script("""
+                      Object.defineProperty(navigator, 'webdriver', {
+                          get: () => undefined
+                      });
+                  """)
 
-                  print("--- [PYTHON] Entering Keep-Alive Loop ---")
+                  print("--- [STEALTH] Navigating to Check Site... ---")
+                  # 访问这个网站可以看到你的伪装效果
+                  try:
+                      page.goto("https://bot.sannysoft.com/") 
+                      print("--- [STEALTH] Page Loaded. Check the VNC screen! ---")
+                  except Exception as e:
+                      print(f"Page load error: {e}")
+
+                  # 截图留证
+                  page.screenshot(path="stealth_check.png")
+
+                  print("--- [STEALTH] Running... ---")
                   while True:
                       time.sleep(10)
           except Exception as e:
-              print(f"!!! [PYTHON ERROR] !!! : {e}")
+              print(f"!!! [ERROR] !!! : {e}")
               sys.exit(1)
           EOF
 
       - name: Start Environment (Xvfb & VNC)
         run: |
-          # 1. 启动 Xvfb
           Xvfb :99 -screen 0 1280x800x24 &
           export DISPLAY=:99
-          
-          # 2. 启动 Fluxbox (窗口管理器)
           fluxbox &
-          
-          # 3. 启动 VNC
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
-          
-          # 4. 启动 noVNC
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 
-      - name: 🔴 RUN BROWSER & SHOW LOGS
+      - name: 🔴 RUN STEALTH BROWSER
         run: |
           export DISPLAY=:99
-          
-          echo "Starting python script..."
-          python3 run_browser.py > browser_output.txt 2>&1 &
+          echo "Launching Stealth Python Script..."
+          python3 run_stealth.py > browser.log 2>&1 &
           PID=$!
-          
-          echo "Waiting 15 seconds for browser start..."
-          sleep 15
-          
-          echo "==================== BROWSER LOGS ===================="
-          cat browser_output.txt
-          echo "======================================================"
-          
-          if ! kill -0 $PID 2>/dev/null; then
-            echo "❌ CRITICAL: Browser script crashed again."
-            exit 1
-          else
-            echo "✅ Browser script is running! Process ID: $PID"
-          fi
+          sleep 10
+          cat browser.log
 
       - name: Start Cloudflare Tunnel
         run: |
@@ -121,7 +126,10 @@ jobs:
           
           sleep 8
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo "=========================================================="
+          echo "🕵️‍♂️ 伪装版浏览器已启动 (模拟 macOS)"
           echo "🔗 访问地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "=========================================================="
 
       - name: Keep Alive
         run: sleep 1200
