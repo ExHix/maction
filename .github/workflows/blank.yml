@@ -1,6 +1,8 @@
 name: Nested MacOS Virtualization (Tart)
 
 on:
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
