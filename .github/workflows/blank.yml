@@ -1,4 +1,4 @@
-name: Playwright Web VNC (Stable)
+name: Playwright VNC (FullScreen Google)
 on: 
   workflow_dispatch:
 
@@ -7,67 +7,100 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.40.0-jammy
-      options: --shm-size=2gb
+      options: --shm-size=2gb # 防止 Chrome 崩溃的关键
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install GUI & VNC Tools
+      - name: Install GUI & Tools
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
           apt-get install -y --no-install-recommends xvfb fluxbox x11vnc python3 python3-pip git net-tools curl ca-certificates
           
+          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
 
+      - name: Create Browser Script
+        run: |
+          # 创建一个 Python 脚本来精准控制浏览器启动
+          cat <<EOF > run_browser.py
+          from playwright.sync_api import sync_playwright
+          import time
+
+          print("Starting Playwright...")
+          with sync_playwright() as p:
+              # 启动 Chromium，参数针对 Docker 环境优化
+              browser = p.chromium.launch(
+                  headless=False,
+                  args=[
+                      "--start-maximized",      # 最大化窗口
+                      "--no-sandbox",           # 容器内必须
+                      "--disable-setuid-sandbox",
+                      "--disable-gpu",          # 软件渲染，防止黑屏
+                      "--disable-dev-shm-usage" # 内存优化
+                  ]
+              )
+              # viewport=None 配合 start-maximized 实现真正全屏
+              context = browser.new_context(viewport=None)
+              page = context.new_page()
+              
+              print("Navigating to Google...")
+              try:
+                  page.goto("https://www.google.com")
+                  print("Page loaded!")
+              except Exception as e:
+                  print(f"Error loading page: {e}")
+
+              # 保持浏览器运行，不退出
+              while True:
+                  time.sleep(10)
+          EOF
+
       - name: Start Desktop Environment
         run: |
-          # 1. 启动虚拟屏幕
-          Xvfb :99 -screen 0 1280x720x24 &
+          # 1. 启动虚拟屏幕 (1280x800)
+          Xvfb :99 -screen 0 1280x800x24 &
           export DISPLAY=:99
           
-          # 2. 启动窗口管理器
+          # 2. 启动窗口管理器 (Fluxbox)
           fluxbox &
           
-          # 3. 启动 VNC Server
+          # 3. 启动 VNC Server (密码: secret)
           x11vnc -display :99 -forever -passwd secret -bg
           
-          # 4. 启动 noVNC (后台运行)
+          # 4. 启动 noVNC (6080 -> 5900)
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           
-          # 关键：等待端口 6080 启动成功，避免隧道连不上
-          echo "Waiting for noVNC to be ready..."
+          # 等待端口就绪
+          echo "Waiting for noVNC..."
           for i in {1..10}; do
-            if netstat -tuln | grep 6080; then
-              echo "noVNC is ready!"
-              break
-            fi
+            if netstat -tuln | grep 6080; then break; fi
             sleep 1
           done
 
-      - name: Launch Browser
+      - name: Launch Browser (FullScreen)
         run: |
           export DISPLAY=:99
-          nohup npx playwright codegen wikipedia.org &
+          # 后台运行 Python 脚本启动浏览器
+          nohup python3 run_browser.py > browser.log 2>&1 &
+          echo "Browser launch command sent."
 
       - name: Start Cloudflare Tunnel
         run: |
-          # 下载 Cloudflare Tunnel 客户端
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
 
-          # 启动隧道 (无需登录，使用临时隧道)
-          # 将日志输出到文件以便提取 URL
+          # 启动隧道
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Starting tunnel..."
-          sleep 5
+          sleep 8
           
-          # 提取 trycloudflare.com 的 URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           if [ -z "$TUNNEL_URL" ]; then
@@ -76,16 +109,12 @@ jobs:
             exit 1
           fi
 
-          # 拼接 VNC 路径
           VNC_URL="$TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
 
           echo "=========================================================="
-          echo "🚀 远程桌面已就绪 (Cloudflare 版 - 更稳定)"
+          echo "🚀 远程浏览器已全屏启动！"
           echo ""
-          echo "🔗 访问地址 (直接点击):"
-          echo "$VNC_URL"
-          echo ""
-          echo "💡 提示: 无需验证 IP，直接访问即可。"
+          echo "🔗 点击进入: $VNC_URL"
           echo "=========================================================="
 
       - name: Keep Alive (20 min)
