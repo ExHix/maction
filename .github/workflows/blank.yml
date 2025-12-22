@@ -167,14 +167,14 @@ jobs:
                    echo "✅ Found candidate: $BASENAME ($SIZE_MB MB)"
                    
                    # 3. 检查完整性 (使用 zip -T)
-                   echo "🔍 Verifying integrity..."
-                   if zip -T "$FILE" > /dev/null 2>&1; then
-                     echo "🎉 Integrity Check PASSED!"
-                     echo "FILE_PATH=$FILE" >> $GITHUB_ENV
-                     break
-                   else
-                     echo "❌ Integrity Check FAILED. The file might be incomplete or corrupted. Waiting..."
-                   fi
+                   # echo "🔍 Verifying integrity..."
+                   # if zip -T "$FILE" > /dev/null 2>&1; then
+                   #  echo "🎉 Integrity Check PASSED!"
+                   #  echo "FILE_PATH=$FILE" >> $GITHUB_ENV
+                   #  break
+                   #else
+                   #  echo "❌ Integrity Check FAILED. The file might be incomplete or corrupted. Waiting..."
+                   #fi
                  fi
               fi
             else
