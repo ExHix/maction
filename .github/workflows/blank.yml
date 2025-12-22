@@ -1,4 +1,4 @@
-name: iOS App Downloader (WARP Accelerated)
+name: iOS App Downloader (WARP Fixed)
 on: 
   workflow_dispatch:
 
@@ -8,7 +8,7 @@ jobs:
     timeout-minutes: 30
     container:
       image: ubuntu:22.04
-      # WARP 需要 privileged 权限才能创建网络接口
+      # WARP 需要 privileged 权限
       options: --privileged --shm-size=2gb
     
     steps:
@@ -24,7 +24,7 @@ jobs:
           apt-get install -y curl wget git net-tools sudo debconf-utils vim zip unzip \
             software-properties-common lsb-release gnupg ca-certificates
           
-          # 准备 Mozilla PPA (防止 snap)
+          # 准备 Mozilla PPA
           add-apt-repository -y ppa:mozillateam/ppa
           echo '
           Package: *
@@ -32,41 +32,46 @@ jobs:
           Pin-Priority: 1001
           ' | tee /etc/apt/preferences.d/mozilla-firefox
 
-      # 2. 安装 Cloudflare WARP (网络加速核心)
+      # 2. 安装 Cloudflare WARP (修复 TOS 报错)
       - name: Install & Configure WARP
         run: |
-          # 添加 Cloudflare GPG Key 和 源
+          # 添加 Key 和 源
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
           
           apt-get update
           apt-get install -y cloudflare-warp
           
-          # 在 Docker 中手动启动 warp-svc 服务
+          # 后台启动 warp-svc
           nohup warp-svc > /var/log/warp.log 2>&1 &
           echo "Waiting for WARP service..."
           sleep 5
           
-          # 注册并设置为 Proxy 模式 (关键步骤)
-          # Proxy 模式只在本地开 SOCKS5 端口，不影响 VNC 连接
-          warp-cli registration new
+          # --- 修复点在这里 ---
+          # 显式接受 TOS
+          warp-cli registration new --accept-tos
+          
+          # 设置为 Proxy 模式 (SOCKS5 端口 40000)
           warp-cli mode proxy
           warp-cli proxy port 40000
+          
+          # 连接
           warp-cli connect
           
           echo "Waiting for WARP connection..."
           sleep 5
           
-          # 验证代理是否通了
+          # 验证
           echo "Testing WARP connectivity..."
+          # 通过代理访问检测接口，查看 warp=on 状态
           if curl -x socks5://127.0.0.1:40000 -s --connect-timeout 5 https://www.cloudflare.com/cdn-cgi/trace | grep "warp=on"; then
             echo "✅ WARP is ON and working!"
           else
-            echo "⚠️ WARP connection failed or not routed (Check logs if download fails)."
+            echo "⚠️ WARP connection failed. Logs:"
             cat /var/log/warp.log
           fi
 
-      # 3. 安装 Firefox & GUI 环境
+      # 3. 安装 Firefox & GUI
       - name: Install Firefox & GUI
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -74,18 +79,16 @@ jobs:
           apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer \
             xvfb fluxbox x11vnc python3 pulseaudio dbus-x11
           
-          # 接受字体协议
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
           
-          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 4. 配置用户与 Firefox (注入 Proxy 设置)
-      - name: Setup Firefox Profile (With Proxy)
+      # 4. 配置 Firefox (注入 Proxy 设置)
+      - name: Setup Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
           
@@ -103,21 +106,21 @@ jobs:
           Version=2
           EOF"
           
-          # 写入 user.js (包含 WARP 代理设置)
+          # 写入 user.js (包含 WARP 代理 + 自动下载 + 防检测)
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
           // === 网络加速 (WARP SOCKS5) ===
-          user_pref(\"network.proxy.type\", 1);               // 1 = 手动配置代理
-          user_pref(\"network.proxy.socks\", \"127.0.0.1\");  // 指向本地 WARP
-          user_pref(\"network.proxy.socks_port\", 40000);     // WARP 端口
+          user_pref(\"network.proxy.type\", 1);
+          user_pref(\"network.proxy.socks\", \"127.0.0.1\");
+          user_pref(\"network.proxy.socks_port\", 40000);
           user_pref(\"network.proxy.socks_version\", 5);
-          user_pref(\"network.proxy.socks_remote_dns\", true); // DNS 也走 WARP，防止污染
+          user_pref(\"network.proxy.socks_remote_dns\", true);
           
           // === 反爬与伪装 ===
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
           
-          // === 允许广告 (防止 Adblock 检测) ===
+          // === 允许广告 ===
           user_pref(\"privacy.trackingprotection.enabled\", false);
           user_pref(\"network.cookie.cookieBehavior\", 0);
           user_pref(\"dom.disable_open_during_load\", false);
@@ -155,7 +158,6 @@ jobs:
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 打开目标网址
           nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
           EOF
           
@@ -164,7 +166,6 @@ jobs:
           
           sleep 5
           
-          # 启动 Cloudflare Tunnel (供你 VNC 连接)
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
@@ -173,8 +174,7 @@ jobs:
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "🚀 WARP 加速模式已启动"
-          echo "🌍 Firefox 正在通过 WARP (1.1.1.1) 访问网络"
+          echo "🚀 WARP 加速模式已启动 (TOS Accepted)"
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
 
