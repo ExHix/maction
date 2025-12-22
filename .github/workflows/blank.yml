@@ -1,11 +1,10 @@
-name: iOS App Downloader (WARP Final Fix)
+name: Firefox Allowed-Ads VNC
 on: 
   workflow_dispatch:
 
 jobs:
-  warp-download:
+  firefox-user:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     container:
       image: ubuntu:22.04
       options: --privileged --shm-size=2gb
@@ -14,64 +13,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 系统基础环境安装
-      - name: Install System Tools
+      # 1. 安装基础环境
+      - name: Install System & Firefox
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # 修复 policy-rc.d 阻止服务启动的问题
-          printf '#!/bin/sh\nexit 0' > /usr/sbin/policy-rc.d
-          
           apt-get update
-          apt-get install -y curl wget git net-tools sudo debconf-utils vim zip unzip \
-            software-properties-common lsb-release gnupg ca-certificates
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip procps
           
           add-apt-repository -y ppa:mozillateam/ppa
+          
           echo '
           Package: *
           Pin: release o=LP-PPA-mozillateam
           Pin-Priority: 1001
           ' | tee /etc/apt/preferences.d/mozilla-firefox
-
-      # 2. 安装并启动 Cloudflare WARP (修复语法与启动报错)
-      - name: Install & Configure WARP
-        run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
           
           apt-get update
-          apt-get install -y cloudflare-warp
-          
-          # 手动启动守护进程
-          nohup warp-svc > /var/log/warp.log 2>&1 &
-          echo "Waiting for warp-svc to warm up..."
-          sleep 10
-          
-          # --- 语法修复点：--accept-tos 必须放在前面 ---
-          warp-cli --accept-tos registration new
-          
-          # 设置模式为 Proxy (SOCKS5 40000)
-          warp-cli --accept-tos mode proxy
-          warp-cli --accept-tos proxy port 40000
-          
-          # 建立连接
-          warp-cli --accept-tos connect
-          
-          echo "Waiting for WARP connection to establish..."
-          sleep 10
-          
-          # 验证
-          echo "Testing WARP status..."
-          warp-cli --accept-tos status
-          curl -x socks5://127.0.0.1:40000 -s https://www.cloudflare.com/cdn-cgi/trace | grep "warp=" || true
-
-      # 3. 安装 Firefox & GUI
-      - name: Install Firefox & GUI
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer \
-            xvfb fluxbox x11vnc python3 pulseaudio dbus-x11
+          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer xvfb fluxbox x11vnc python3 pulseaudio dbus-x11
           
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
@@ -81,11 +40,11 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 4. 配置用户与 Firefox Profile
-      - name: Setup Firefox Profile
+      # 2. 创建用户 & 配置“允许广告”的 Profile
+      - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
-          su appuser -c "mkdir -p /home/appuser/Downloads"
+          
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
@@ -94,33 +53,34 @@ jobs:
           IsRelative=1
           Path=stealth.default
           Default=1
+          
           [General]
           StartWithLastProfile=1
           Version=2
           EOF"
           
+          # 核心修改：写入允许广告和追踪的 user.js
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
-          user_pref(\"network.proxy.type\", 1);
-          user_pref(\"network.proxy.socks\", \"127.0.0.1\");
-          user_pref(\"network.proxy.socks_port\", 40000);
-          user_pref(\"network.proxy.socks_version\", 5);
-          user_pref(\"network.proxy.socks_remote_dns\", true);
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
           user_pref(\"privacy.trackingprotection.enabled\", false);
+          user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
+          user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
+          user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
+          user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
           user_pref(\"network.cookie.cookieBehavior\", 0);
+          user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
+          user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
           user_pref(\"dom.disable_open_during_load\", false);
-          user_pref(\"browser.download.folderList\", 2);
-          user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
-          user_pref(\"browser.download.useDownloadDir\", true);
-          user_pref(\"browser.download.manager.showWhenStarting\", false);
+          user_pref(\"media.peerconnection.enabled\", false);
           EOF"
 
-      # 5. 启动桌面
-      - name: Start Desktop
+      # 3. 启动桌面
+      - name: Start Desktop (As User)
         run: |
           service dbus start || true
+          
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
@@ -131,59 +91,115 @@ jobs:
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
+          
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
+          sleep 3
 
-      # 6. 启动 Firefox & 隧道
-      - name: Launch Firefox
+      # 4. (新) 启动后台监控脚本
+      # 该步骤会启动一个后台进程，监控 Downloads 目录。
+      # 一旦发现有效的 IPA 文件，它会杀死下一步骤中的 tail 进程，从而允许 Workflow 继续。
+      - name: Start Background Monitor
+        run: |
+          # 将当前 GITHUB_ENV 的路径保存，以便脚本写入环境变量
+          ENV_FILE="$GITHUB_ENV"
+          
+          cat <<EOF > /home/appuser/monitor_download.sh
+          #!/bin/bash
+          TARGET_DIR="/home/appuser/Downloads"
+          MAX_SIZE_MB=100
+          
+          echo "Starting background monitoring for *.ipa in \$TARGET_DIR..."
+          
+          while true; do
+            # 查找 ipa 文件
+            FILE=\$(find "\$TARGET_DIR" -name "*.ipa" -print -quit)
+            
+            if [ -n "\$FILE" ]; then
+              BASENAME=\$(basename "\$FILE")
+              
+              # 1. 检查是否还在下载
+              if [ -f "\${FILE}.part" ] || [ -f "\${FILE}.partjs" ]; then
+                 echo "⏳ File \$BASENAME is still downloading..."
+              else
+                 # 2. 检查大小
+                 SIZE_MB=\$(du -m "\$FILE" | cut -f1)
+                 
+                 if [ "\$SIZE_MB" -ge "\$MAX_SIZE_MB" ]; then
+                   echo "⚠️ Found \$BASENAME but size (\$SIZE_MB MB) is too large. Waiting..."
+                 else
+                   echo "✅ Found candidate: \$BASENAME (\$SIZE_MB MB)"
+                   
+                   # 3. 检查完整性
+                   if zip -T "\$FILE" > /dev/null 2>&1; then
+                     echo "🎉 Integrity Check PASSED! Killing Firefox wait loop..."
+                     
+                     # 写入环境变量供后续步骤使用（如果需要）
+                     echo "FILE_PATH=\$FILE" >> "$ENV_FILE"
+                     
+                     # --- 核心逻辑：杀死保持 Firefox 步骤运行的 tail 进程 ---
+                     # 查找运行 'tail -f ... firefox.log' 的进程并结束它
+                     pkill -f "tail -f /home/appuser/firefox.log"
+                     
+                     exit 0
+                   else
+                     echo "❌ Integrity Check FAILED. Waiting..."
+                   fi
+                 fi
+              fi
+            fi
+            sleep 3
+          done
+          EOF
+          
+          chmod +x /home/appuser/monitor_download.sh
+          # 在后台运行监控脚本，并将日志输出到 monitor.log
+          nohup /home/appuser/monitor_download.sh > /home/appuser/monitor.log 2>&1 &
+          
+          echo "Background monitor started."
+
+      # 5. (新) 启动 Firefox 并保持会话
+      # 这里会一直运行，直到被上一步的后台脚本“杀掉”
+      - name: Launch Firefox & Tunnel
         run: |
           cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
+          # 替换成你的目标网址
           nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
           EOF
+          
           chmod +x /home/appuser/run_firefox.sh
           su appuser -c "/home/appuser/run_firefox.sh"
           
+          echo "Firefox launching..."
           sleep 5
+          
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
+          
+          echo "Waiting for Tunnel..."
           sleep 10
+          
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          
           echo "=========================================================="
-          echo "🚀 WARP Accelerated Environment Ready"
-          echo "🔗 VNC: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
+          echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "⏳ 等待用户下载完成 (后台监控脚本运行中)..."
           echo "=========================================================="
+          
+          # 阻塞在此处，直到后台监控脚本执行 pkill 命令
+          # 添加 || true 确保被 kill 后不报错退出
+          tail -f /home/appuser/firefox.log || true
+          
+          echo "🛑 Session ended by monitor script (Download detected)."
 
-      # 7. 智能监控下载 (自动退出)
-      - name: Monitor Download
-        run: |
-          echo "Monitoring /home/appuser/Downloads for IPA..."
-          while true; do
-            FILE=$(find "/home/appuser/Downloads" -name "*.ipa" -print -quit)
-            if [ -n "$FILE" ]; then
-              if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
-                 echo "⏳ Downloading..."
-              else
-                 echo "✅ Found IPA. Checking integrity..."
-                 if zip -T "$FILE" > /dev/null 2>&1; then
-                   echo "🎉 Verified!"
-                   echo "IPA_FINAL_PATH=$FILE" >> $GITHUB_ENV
-                   break
-                 else
-                   echo "❌ Integrity failed, still waiting..."
-                 fi
-              fi
-            fi
-            sleep 5
-          done
-
-      # 8. 保存产物
-      - name: Upload Artifact
+      # 6. 上传产物
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-package
-          path: ${{ env.IPA_FINAL_PATH }}
-          retention-days: 1
+          name: decrypted-app
+          path: /home/appuser/Downloads/*.ipa
