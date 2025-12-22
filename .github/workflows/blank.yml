@@ -1,4 +1,4 @@
-name: CF-Bypass Desktop (DrissionPage)
+name: CF-Bypass Desktop (Fix Install)
 on: 
   workflow_dispatch:
 
@@ -7,35 +7,56 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 必须开启 privileged 权限，否则 DrissionPage 的某些底层操作受限
+      # 必须开启 privileged 权限
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Environment
+      # 1. 先安装基础工具 (确保 git, python, debconf 肯定能装上)
+      - name: Install Basic Tools
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装 Python 和 依赖
-          apt-get install -y python3 python3-pip wget curl net-tools xvfb fluxbox x11vnc sudo
+          # 关键：先安装 debconf-utils 才能执行后面的协议同意命令
+          apt-get install -y debconf-utils git wget curl net-tools python3 python3-pip sudo software-properties-common
+
+      # 2. 安装字体 (独立步骤，防止卡住其他包)
+      - name: Install Fonts (Anti-Detect)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # 预先同意微软字体协议
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           
-          # 安装 Chrome (DrissionPage 需要原生 Chrome)
+          # 安装字体 (如果失败不阻断流程，加上 || true)
+          apt-get install -y ttf-mscorefonts-installer fonts-liberation || echo "Fonts warning (ignored)"
+          
+          # 刷新缓存
+          fc-cache -f -v
+
+      # 3. 安装 Chrome 和 GUI 环境
+      - name: Install Chrome & GUI
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get install -y xvfb fluxbox x11vnc
+          
+          # 下载并安装 Chrome
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           apt-get install -y ./google-chrome-stable_current_amd64.deb
           
-          # 安装 微软字体 (指纹伪装)
-          apt-get install -y --no-install-recommends software-properties-common ttf-mscorefonts-installer fonts-liberation
-          
-          # 安装 noVNC
+          # 安装 DrissionPage
+          pip3 install DrissionPage
+
+      # 4. 安装 noVNC (现在 git 肯定好了)
+      - name: Install noVNC
+        run: |
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-          
-          # 安装 DrissionPage (过盾神器)
-          pip3 install DrissionPage
 
       - name: Start Virtual Desktop
         run: |
@@ -51,50 +72,39 @@ jobs:
           cat <<EOF > bypass.py
           from DrissionPage import ChromiumPage, ChromiumOptions
           import time
+          import os
           
-          # 配置 DrissionPage
+          print("--- Initializing DrissionPage ---")
+          
           co = ChromiumOptions()
+          # 关键参数：指向刚安装的官方 Chrome
+          co.set_browser_path('/usr/bin/google-chrome') 
           co.set_argument('--no-sandbox')
           co.set_argument('--start-maximized')
-          # 关键：指定 user_data_dir 使得浏览器像真实用户一样保存 Cookie
+          co.set_argument('--disable-gpu')
           co.set_user_data_path('/tmp/drission_profile')
           
-          # 尝试伪装 Mac (IP太烂的情况下，Mac指纹通常比Win好一点点)
-          co.set_user_agent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+          # 伪装 Mac UA
+          co.set_user_agent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
 
-          print("--- Launching Browser via DrissionPage ---")
-          page = ChromiumPage(addr_or_opts=co)
-          
-          target_url = "https://nowsecure.nl" # 一个经典的 CF 挑战测试页，或者换成你的目标URL
-          
-          print(f"--- Navigating to {target_url} ---")
-          page.get(target_url)
-          
-          print("--- Checking for Cloudflare Challenge... ---")
-          
-          # 简单的自动过盾逻辑 (DrissionPage 并不是全自动魔法，但它控制点击的特征非常像人)
           try:
-              # 尝试定位常见的 CF iframe
-              if page.ele('xpath://iframe[contains(@src, "cloudflare")]', timeout=5):
-                  print("Found Cloudflare iframe!")
-                  iframe = page.get_frame('xpath://iframe[contains(@src, "cloudflare")]')
-                  # 尝试点击复选框
-                  checkbox = iframe.ele('xpath://input[@type="checkbox"] | //div[@id="challenge-stage"]', timeout=3)
-                  if checkbox:
-                      print("Found checkbox, attempting to click...")
-                      time.sleep(1) # 稍微等待，模拟人类反应
-                      checkbox.click()
-                      print("Clicked!")
-                  else:
-                      print("Checkbox not found via simple selector.")
+              page = ChromiumPage(addr_or_opts=co)
+              
+              target_url = "https://nowsecure.nl" 
+              print(f"--- Navigating to {target_url} ---")
+              page.get(target_url)
+              
+              print("--- Page Loaded. Waiting for user interaction via VNC ---")
+              
+              # 这里不写复杂的自动点击，避免报错退出，直接由你在 VNC 操作
+              while True:
+                  time.sleep(10)
+                  
           except Exception as e:
-              print(f"Auto-click logic info: {e}")
-
-          print("--- Browser is Ready. Please control via VNC. ---")
-          
-          # 保持运行
-          while True:
-              time.sleep(10)
+              print(f"Error: {e}")
+              # 即使报错也不退出，保持 VNC 活着方便查看
+              while True:
+                  time.sleep(10)
           EOF
 
       - name: Run DrissionPage & Tunnel
@@ -109,14 +119,20 @@ jobs:
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          sleep 8
+          echo "Starting Tunnel..."
+          sleep 10
+          
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
+          if [ -z "$TUNNEL_URL" ]; then
+             echo "Tunnel URL not found. Logs:"
+             cat tunnel.log
+          fi
+
           echo "=========================================================="
-          echo "🛡️ DrissionPage 增强版浏览器已启动"
-          echo "👉 这个版本使用了 DP 库，比原生 Chrome 更容易过盾"
+          echo "🛡️ DrissionPage 浏览器环境已修复"
           echo "🔗 VNC 地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
           
-          # 实时打印浏览器日志，方便你看 DrissionPage 的操作
+          # 监控日志
           tail -f browser.log
