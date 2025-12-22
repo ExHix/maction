@@ -43,4 +43,4 @@ jobs:
 
           # 使用 tart 运行虚拟机并执行脚本
           # 注意：在 CI 中运行 VM 非常消耗资源，可能会很慢
-          tart run sequoia-15-1 --command "bash" < guest_script.sh
+          tart run sequoia-15-1
