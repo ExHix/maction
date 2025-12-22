@@ -1,135 +1,117 @@
-name: Fake-Mac Crawler Desktop
+name: Windows RDP Crawler (Native)
 on: 
   workflow_dispatch:
 
 jobs:
-  stealth-browser:
-    runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright:v1.40.0-jammy
-      options: --shm-size=2gb --security-opt seccomp=unconfined
+  win-rdp:
+    runs-on: windows-latest # 使用原生 Windows Server 2022
     
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Fonts & Tools (反爬关键)
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      # 1. 设置用户密码 (RDP 登录需要)
+      - name: Set User Password
+        id: reset-pass
+        shell: powershell
         run: |
-          apt-get update
-          # 安装常用工具
-          apt-get install -y xvfb fluxbox x11vnc python3 python3-pip git net-tools curl ca-certificates procps
-          
-          # [关键步骤] 安装微软核心字体和常用字体，防止因字体缺失被识别为 Linux 机器人
-          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
-          apt-get install -y --no-install-recommends ttf-mscorefonts-installer fonts-liberation fonts-noto-color-emoji fonts-freefont-ttf
-          
-          # 刷新字体缓存
-          fc-cache -f -v
-          
-          # 安装环境依赖
-          pip3 install playwright
-          python3 -m playwright install chromium
-          
-          # 安装 Web VNC
-          git clone https://github.com/novnc/noVNC.git /opt/noVNC
-          git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
-          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
+          $password = "SecretPass123!" # <--- 你的 RDP 密码
+          net user runneradmin $password
+          echo "Password set successfully."
 
-      - name: Create Stealth Browser Script
+      # 2. 安装 Playwright 和 Python
+      - name: Install Python & Playwright
+        shell: powershell
         run: |
-          cat <<EOF > run_stealth.py
-          import sys
+          pip install playwright
+          playwright install chromium
+          # 也是为了防止找不到浏览器，安装一下
+          python -m playwright install chromium
+
+      # 3. 创建启动脚本 (自动打开 Chrome)
+      - name: Create Python Script
+        shell: powershell
+        run: |
+          $scriptContent = @"
           import time
           from playwright.sync_api import sync_playwright
 
-          # 伪装成 macOS 的 User Agent
-          MAC_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          print('--- Starting Windows Chrome ---')
+          with sync_playwright() as p:
+              # Windows 上不需要 sandbox 参数，环境更真实
+              browser = p.chromium.launch(
+                  headless=False,
+                  channel="chrome", # 尝试调用系统 Chrome (如果有) 或 bundled chromium
+                  args=["--start-maximized"]
+              )
+              context = browser.new_context(viewport=None)
+              page = context.new_page()
+              
+              print('--- Navigating... ---')
+              try:
+                  page.goto("https://www.google.com")
+              except:
+                  pass
+              
+              print('--- Browser Ready. Connect via RDP to control. ---')
+              
+              # 死循环保持运行
+              while True:
+                  time.sleep(10)
+          "@
+          Set-Content -Path run_win.py -Value $scriptContent
 
-          print("--- [STEALTH] Starting Stealth Browser... ---")
-          try:
-              with sync_playwright() as p:
-                  # 使用 launch_persistent_context 模拟真实用户数据目录
-                  # 这比普通的 launch 更难被检测
-                  user_data_dir = "/tmp/chrome_user_data"
-                  
-                  browser = p.chromium.launch_persistent_context(
-                      user_data_dir,
-                      headless=False,
-                      user_agent=MAC_USER_AGENT, # 1. 伪装 UA
-                      viewport=None,             # 2. 禁用默认 Viewport
-                      locale="en-US",            # 3. 设置语言环境
-                      timezone_id="America/New_York", # 4. 伪装时区 (可选)
-                      args=[
-                          "--start-maximized",
-                          "--no-sandbox",
-                          "--disable-setuid-sandbox",
-                          "--disable-dev-shm-usage",
-                          "--disable-gpu",
-                          # 5. [核心反爬] 禁用自动化控制特性
-                          "--disable-blink-features=AutomationControlled", 
-                          "--disable-infobars"
-                      ]
-                  )
-                  
-                  page = browser.pages[0]
-                  
-                  # 6. [核心反爬] 注入脚本，抹除 WebDriver 痕迹
-                  page.add_init_script("""
-                      Object.defineProperty(navigator, 'webdriver', {
-                          get: () => undefined
-                      });
-                  """)
-
-                  print("--- [STEALTH] Navigating to Check Site... ---")
-                  # 访问这个网站可以看到你的伪装效果
-                  try:
-                      page.goto("https://bot.sannysoft.com/") 
-                      print("--- [STEALTH] Page Loaded. Check the VNC screen! ---")
-                  except Exception as e:
-                      print(f"Page load error: {e}")
-
-                  # 截图留证
-                  page.screenshot(path="stealth_check.png")
-
-                  print("--- [STEALTH] Running... ---")
-                  while True:
-                      time.sleep(10)
-          except Exception as e:
-              print(f"!!! [ERROR] !!! : {e}")
-              sys.exit(1)
-          EOF
-
-      - name: Start Environment (Xvfb & VNC)
+      # 4. 开启 RDP 访问权限
+      - name: Enable RDP Access
+        shell: powershell
         run: |
-          Xvfb :99 -screen 0 1280x800x24 &
-          export DISPLAY=:99
-          fluxbox &
-          x11vnc -display :99 -forever -passwd secret -bg -noxdamage
-          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 1
 
-      - name: 🔴 RUN STEALTH BROWSER
+      # 5. 启动 Ngrok TCP 隧道 (暴露 3389 端口)
+      - name: Start Ngrok Tunnel
+        shell: powershell
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
-          export DISPLAY=:99
-          echo "Launching Stealth Python Script..."
-          python3 run_stealth.py > browser.log 2>&1 &
-          PID=$!
-          sleep 10
-          cat browser.log
-
-      - name: Start Cloudflare Tunnel
-        run: |
-          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          dpkg -i cloudflared.deb
-          cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
+          if ($env:NGROK_AUTH_TOKEN -eq "") {
+            Write-Error "请先在 GitHub Secrets 中配置 NGROK_AUTH_TOKEN"
+            exit 1
+          }
           
-          sleep 8
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo "=========================================================="
-          echo "🕵️‍♂️ 伪装版浏览器已启动 (模拟 macOS)"
-          echo "🔗 访问地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          echo "=========================================================="
+          # 下载 Ngrok
+          Invoke-WebRequest -Uri https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath .
+          
+          # 配置 Token
+          .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
+          
+          # 后台启动 TCP 隧道
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -PassThru
+          
+          # 等待启动
+          Start-Sleep -Seconds 5
+          
+          # 获取公网地址
+          $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
+          $url = $tunnels.tunnels[0].public_url
+          
+          # 去掉 tcp:// 前缀
+          $cleanUrl = $url -replace "tcp://", ""
+          
+          Write-Host "======================================================"
+          Write-Host "🖥️ Windows 远程桌面 (RDP) 已就绪"
+          Write-Host ""
+          Write-Host "👉 连接地址: $cleanUrl"
+          Write-Host "👉 用户名: runneradmin"
+          Write-Host "👉 密码: SecretPass123!"
+          Write-Host ""
+          Write-Host "💡 使用方法: 电脑/手机打开 '远程桌面' 客户端，输入地址连接。"
+          Write-Host "======================================================"
 
-      - name: Keep Alive
-        run: sleep 1200
+      # 6. 运行浏览器脚本 (保持 Session 活跃)
+      - name: Run Browser & Keep Alive
+        shell: powershell
+        run: |
+          python run_win.py
