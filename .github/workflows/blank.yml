@@ -161,8 +161,8 @@ jobs:
                  # 2. 检查大小
                  SIZE_MB=$(du -m "$FILE" | cut -f1)
                  
-                 if [ "$SIZE_MB" -ge "$MAX_SIZE_MB" ]; then
-                   echo "⚠️ Found $BASENAME but size ($SIZE_MB MB) is too large (> $MAX_SIZE_MB MB). Waiting for correct file..."
+                 if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
+                   echo "⚠️ Found $BASENAME but size ($SIZE_MB MB) is too small (> $MAX_SIZE_MB MB). Waiting for correct file..."
                  else
                    echo "✅ Found candidate: $BASENAME ($SIZE_MB MB)"
                    
