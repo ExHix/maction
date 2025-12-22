@@ -1,53 +1,49 @@
-name: UTM Force Emulation Attempt
+name: QEMU Brute Force Emulation
 
 on:
   workflow_dispatch:
 
 jobs:
-  utm-brute-force:
+  qemu-force:
     runs-on: macos-15
 
     steps:
-      - name: 1. 清理极限磁盘空间
-        run: |
-          echo "清理前空间:"
-          df -h
-          sudo rm -rf /Users/runner/Library/Android/sdk
-          # sudo rm -rf /Library/Developer/CommandLineTools
-          sudo rm -rf /Applications/Xcode* # 极其危险但能腾出巨大空间
-          echo "清理后空间:"
-          df -h
-
-      - name: 2. 安装 UTM (带命令行工具)
+      - name: Install UTM
         run: brew install --cask utm
 
-      - name: 3. 强行尝试拉取/准备虚拟机
+      - name: Locate QEMU and Force Run
         run: |
-          # 定义 UTM 路径
-          alias utmctl='/Applications/UTM.app/Contents/MacOS/utmctl'
+          # 1. 动态寻找 QEMU 路径 (UTM 内部路径可能随版本变化)
+          QEMU_PATH=$(find /Applications/UTM.app -name "qemu-system-aarch64" -type f | head -n 1)
           
-          echo "UTM 版本:"
-          utmctl --version || echo "无法直接运行 utmctl，尝试启动应用..."
+          if [ -z "$QEMU_PATH" ]; then
+            echo "❌ 未找到 QEMU 引擎，尝试使用系统自带 QEMU"
+            brew install qemu
+            QEMU_PATH=$(which qemu-system-aarch64)
+          fi
           
-          # 注意：在无 GUI 环境下，UTM 很难直接创建 macOS 虚拟机
-          # 正常流程需要一个 .utm 包。这里我们尝试用 QEMU 模拟一个极小的系统
-          # 模拟 macOS 镜像太大，我们改用一个极小的 Linux 镜像来证明 UTM 能在命令行跑起来
-          
-          echo "由于 macOS 镜像 (13GB+) 会导致磁盘溢出，系统将尝试初始化一个轻量级 QEMU 环境"
-          
-      - name: 4. 强行启动 QEMU 模拟 (UTM 底层)
-        run: |
-          # 既然 UTM 在 CI 里难以初始化 macOS
-          # 我们直接调用 UTM 内置的 QEMU 引擎，使用纯软件模拟 (-accel tcg)
-          # 这模拟了 UTM 在没有硬件加速时的行为
-          /Applications/UTM.app/Contents/Frameworks/qemu.framework/Versions/A/Helpers/qemu-system-aarch64 \
+          echo "✅ 使用 QEMU 路径: $QEMU_PATH"
+
+          # 2. 尝试启动模拟
+          # 我们使用 -accel tcg (软件模拟) 而不是 hvf (硬件加速)
+          # 注意：这里我们不加载 13GB 的 macOS，因为磁盘会爆炸。
+          # 我们让 QEMU 启动并打印其支持的模拟硬件列表，证明它具备“强行模拟”的能力。
+          $QEMU_PATH \
             -machine virt \
-            -cpu cortex-a57 \
-            -m 2G \
+            -cpu max \
+            -accel tcg \
             -display none \
-            -serial mon:stdio \
-            -append "console=ttyAMA0" \
-            -help | head -n 20
-          
-          echo "⚠️ 结论：即便强行运行，由于缺乏 -accel hvf，QEMU/UTM 只能进入 TCG 模拟模式。"
-          echo "在 GitHub Actions 中模拟 macOS 需要超过 20 小时的时间且磁盘空间不足。"
+            -monitor stdio << 'EOF'
+          info status
+          info version
+          quit
+          EOF
+
+      - name: Why macOS Guest Fails
+        run: |
+          echo "=================================================="
+          echo "💡 为什么无法直接在这里‘拉取并安装’ macOS？"
+          echo "1. 空间限制：macOS 镜像 (13GB) + 解压 (30GB) > Runner 空间 (14GB)。"
+          echo "2. 交互限制：macOS 安装需要鼠标点击，UTM 命令行无法自动化点击‘同意条款’。"
+          echo "3. 速度限制：TCG 模式下，macOS 开机需要约 4-8 小时。"
+          echo "=================================================="
