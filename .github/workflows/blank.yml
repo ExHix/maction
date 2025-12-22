@@ -1,11 +1,10 @@
-name: iOS App Decrypt Downloader
+name: Manual IPA Download & Artifact
 on: 
   workflow_dispatch:
 
 jobs:
-  manual-download:
+  ipa-downloader:
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # 设置最大超时，防止忘记操作一直卡着
     container:
       image: ubuntu:22.04
       options: --privileged --shm-size=2gb
@@ -14,15 +13,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 (包含 zip/unzip 用于校验)
-      - name: Install System & Tools
+      # 1. 安装 Firefox, VNC, 和 zip 工具
+      - name: Install Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim zip unzip
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip
           
           add-apt-repository -y ppa:mozillateam/ppa
+          
           echo '
           Package: *
           Pin: release o=LP-PPA-mozillateam
@@ -40,52 +40,43 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 2. 创建用户 & 配置 Profile (允许广告 + 自动下载配置)
+      # 2. 创建普通用户并配置 Firefox
       - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
           
-          # 创建下载目录
-          su appuser -c "mkdir -p /home/appuser/Downloads"
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
-          # 写入 profiles.ini
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
           [Profile0]
           Name=default
           IsRelative=1
           Path=stealth.default
           Default=1
-          
           [General]
           StartWithLastProfile=1
           Version=2
           EOF"
           
-          # 写入 user.js
+          # 写入允许广告和追踪的 user.js
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
-          // === 1. 反爬伪装 ===
           user_pref(\"dom.webdriver.enabled\", false);
-          user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
-          
-          // === 2. 允许广告 (修复 Adblock 检测) ===
           user_pref(\"privacy.trackingprotection.enabled\", false);
           user_pref(\"network.cookie.cookieBehavior\", 0);
-          user_pref(\"dom.disable_open_during_load\", false);
-          
-          // === 3. 自动下载设置 (关键) ===
-          user_pref(\"browser.download.folderList\", 2); // 2 表示使用自定义目录
-          user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
-          user_pref(\"browser.download.useDownloadDir\", true); // 禁止弹窗询问保存位置
-          user_pref(\"browser.download.manager.showWhenStarting\", false);
+          user_pref(\"media.peerconnection.enabled\", false);
           EOF"
+          
+          # 创建下载目录
+          su appuser -c "mkdir -p /home/appuser/Downloads"
 
-      # 3. 启动桌面
-      - name: Start Desktop (As User)
+      # 3. 启动桌面和 Firefox
+      - name: Start Desktop & Firefox
         run: |
+          # 启动系统服务
           service dbus start || true
           
+          # 创建并运行桌面启动脚本
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
@@ -96,40 +87,38 @@ jobs:
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
-          
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
-
-      # 4. 启动 Firefox & Tunnel
-      - name: Launch Firefox & Tunnel
-        run: |
+          
+          # 创建并运行浏览器启动脚本
           cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 直接打开目标网址
-          nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
+          # 打开目标 URL
+          firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" &
           EOF
-          
           chmod +x /home/appuser/run_firefox.sh
           su appuser -c "/home/appuser/run_firefox.sh"
-          
-          sleep 5
-          
+
+      # 4. 启动隧道并显示链接
+      - name: Start Tunnel & Show Link
+        run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          sleep 8
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo "Waiting for Tunnel..."
+          sleep 10
+          
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0.9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "📥 下载任务已就绪"
-          echo "🔗 VNC 操作地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          echo "👉 请进入 VNC，登录并点击下载按钮。"
-          echo "👀 脚本正在监控 /home/appuser/Downloads 目录..."
+          echo "✅ 环境就绪, 请开始手动操作"
+          echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "⏳ 等待下载 IPA 文件中... (超时时间 15 分钟)"
           echo "=========================================================="
-
+          
       # 5. 核心步骤：监控下载并校验
       - name: Monitor Download (Wait for IPA)
         run: |
@@ -183,5 +172,3 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: decrypted-app
-          path: ${{ env.FILE_PATH }}
-          retention-days: 1
