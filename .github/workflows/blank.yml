@@ -7,7 +7,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.40.0-jammy
-      # 需要共享内存以避免浏览器崩溃
       options: --shm-size=2gb
     
     steps:
@@ -15,19 +14,19 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install GUI & VNC Tools
+        env:
+          DEBIAN_FRONTEND: noninteractive # 修复 tzdata 卡住的问题
         run: |
           apt-get update
-          # 安装 X11, 窗口管理器, VNC server, 和 Python (noVNC 需要)
-          apt-get install -y xvfb fluxbox x11vnc python3 python3-pip git net-tools
+          # 安装 X11, 窗口管理器, VNC server
+          apt-get install -y --no-install-recommends xvfb fluxbox x11vnc python3 python3-pip git net-tools curl ca-certificates
           
-          # 下载 noVNC (Web版 VNC 客户端)
+          # 下载 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
-          
-          # 生成一个简单的 html 入口，自动连接
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
 
-      - name: Get Public IP (For Tunnel Auth)
+      - name: Get Public IP
         id: public_ip
         run: |
           IP=$(curl -s https://api.ipify.org)
@@ -40,39 +39,36 @@ jobs:
           Xvfb :99 -screen 0 1280x720x24 &
           export DISPLAY=:99
           
-          # 2. 启动窗口管理器 (不然浏览器没法拖动/最大化)
+          # 2. 启动窗口管理器
           fluxbox &
           
-          # 3. 启动 VNC Server (设置密码为 secret)
+          # 3. 启动 VNC Server (密码设为 secret)
           x11vnc -display :99 -forever -passwd secret -bg
           
-          # 4. 启动 noVNC (将 VNC 转为 Web 流量，端口 6080)
+          # 4. 启动 noVNC (6080 转 5900)
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           
           echo "Desktop environment started."
 
-      - name: Launch Browser (Visual Mode)
+      - name: Launch Browser
         run: |
           export DISPLAY=:99
-          
-          # 这里我们启动 Playwright 的 Codegen 模式，或者直接启动 Chromium
-          # Codegen 模式最好，因为它会同时打开一个浏览器和一个代码生成窗口，方便你调试
+          # 启动 Playwright Codegen (带界面的浏览器)
           nohup npx playwright codegen wikipedia.org &
           
-          echo "Browser launched in background."
-
       - name: Start Tunnel & Show Link
         env:
           RUNNER_IP: ${{ steps.public_ip.outputs.ip }}
         run: |
           npm install -g localtunnel
 
-          # 穿透 6080 端口 (noVNC 的 Web 端口)
+          # 启动穿透
           lt --port 6080 > tunnel.log 2>&1 &
           
           echo "Waiting for tunnel URL..."
           sleep 5
           
+          # 提取 URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.loca\.lt" tunnel.log | head -1)
           
           if [ -z "$TUNNEL_URL" ]; then
@@ -81,13 +77,16 @@ jobs:
             exit 1
           fi
 
+          # 构建直达链接
+          VNC_URL="$TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+
           echo "=========================================================="
           echo "🖥️  浏览器远程桌面已就绪！"
           echo ""
-          echo "1️⃣  验证 IP: 必须先打开链接输入下方 IP"
+          echo "1️⃣  【必须】验证 IP: 点击链接输入下方 IP"
           echo "👉  GitHub Runner IP: $RUNNER_IP"
           echo ""
-          echo "2️⃣  访问地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "2️⃣  访问地址: $VNC_URL"
           echo "    (如果点击后白屏，请点击左侧侧边栏 -> Settings -> Scaling Mode -> Local Scaling)"
           echo "=========================================================="
 
