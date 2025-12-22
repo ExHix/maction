@@ -130,7 +130,7 @@ jobs:
           export HOME=/home/appuser
           
           # 启动 Firefox
-          nohup firefox --no-remote --new-instance "https://nowsecure.nl" > /home/appuser/firefox.log 2>&1 &
+          nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710/" > /home/appuser/firefox.log 2>&1 &
           EOF
           
           chmod +x /home/appuser/run_firefox.sh
