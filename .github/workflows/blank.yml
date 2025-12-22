@@ -173,6 +173,7 @@ jobs:
                    #  echo "FILE_PATH=$FILE" >> $GITHUB_ENV
                    #  break
                    #else
+                   break
                    #  echo "❌ Integrity Check FAILED. The file might be incomplete or corrupted. Waiting..."
                    #fi
                  fi
