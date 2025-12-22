@@ -1,123 +1,122 @@
-name: Native Chrome Stealth VNC
+name: CF-Bypass Desktop (DrissionPage)
 on: 
   workflow_dispatch:
 
 jobs:
-  chrome-desktop:
+  bypass-cf:
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:22.04 # 使用纯净的 Ubuntu 镜像
-      options: --shm-size=2gb --security-opt seccomp=unconfined
+      image: ubuntu:22.04
+      # 必须开启 privileged 权限，否则 DrissionPage 的某些底层操作受限
+      options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Desktop & Chrome (Native)
+      - name: Install Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 1. 安装基础工具和桌面环境
-          apt-get install -y wget curl git net-tools xvfb fluxbox x11vnc python3 python3-pip sudo pulseaudio
+          # 安装 Python 和 依赖
+          apt-get install -y python3 python3-pip wget curl net-tools xvfb fluxbox x11vnc sudo
           
-          # 2. [关键] 安装微软常用字体 (绕过字体指纹检测)
-          apt-get install -y --no-install-recommends software-properties-common
-          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
-          apt-get install -y --no-install-recommends ttf-mscorefonts-installer fonts-liberation fonts-noto-color-emoji
-          
-          # 3. 下载并安装官方 Google Chrome Stable (非 Chromium)
+          # 安装 Chrome (DrissionPage 需要原生 Chrome)
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           apt-get install -y ./google-chrome-stable_current_amd64.deb
           
-          # 4. 安装 noVNC
+          # 安装 微软字体 (指纹伪装)
+          apt-get install -y --no-install-recommends software-properties-common ttf-mscorefonts-installer fonts-liberation
+          
+          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           
-          # 刷新字体缓存
-          fc-cache -f -v
+          # 安装 DrissionPage (过盾神器)
+          pip3 install DrissionPage
 
-      - name: Start Desktop Environment
+      - name: Start Virtual Desktop
         run: |
-          # 启动虚拟显示器
           Xvfb :99 -screen 0 1280x800x24 &
           export DISPLAY=:99
-          
-          # 启动窗口管理器
           fluxbox &
-          
-          # 启动 VNC Server
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
-          
-          # 启动 noVNC (转 Web 访问)
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
-          
-          echo "Waiting for Desktop..."
-          sleep 5
+          sleep 3
 
-      - name: Launch Native Chrome (Stealth Mode)
+      - name: Create Bypass Script
+        run: |
+          cat <<EOF > bypass.py
+          from DrissionPage import ChromiumPage, ChromiumOptions
+          import time
+          
+          # 配置 DrissionPage
+          co = ChromiumOptions()
+          co.set_argument('--no-sandbox')
+          co.set_argument('--start-maximized')
+          # 关键：指定 user_data_dir 使得浏览器像真实用户一样保存 Cookie
+          co.set_user_data_path('/tmp/drission_profile')
+          
+          # 尝试伪装 Mac (IP太烂的情况下，Mac指纹通常比Win好一点点)
+          co.set_user_agent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+          print("--- Launching Browser via DrissionPage ---")
+          page = ChromiumPage(addr_or_opts=co)
+          
+          target_url = "https://nowsecure.nl" # 一个经典的 CF 挑战测试页，或者换成你的目标URL
+          
+          print(f"--- Navigating to {target_url} ---")
+          page.get(target_url)
+          
+          print("--- Checking for Cloudflare Challenge... ---")
+          
+          # 简单的自动过盾逻辑 (DrissionPage 并不是全自动魔法，但它控制点击的特征非常像人)
+          try:
+              # 尝试定位常见的 CF iframe
+              if page.ele('xpath://iframe[contains(@src, "cloudflare")]', timeout=5):
+                  print("Found Cloudflare iframe!")
+                  iframe = page.get_frame('xpath://iframe[contains(@src, "cloudflare")]')
+                  # 尝试点击复选框
+                  checkbox = iframe.ele('xpath://input[@type="checkbox"] | //div[@id="challenge-stage"]', timeout=3)
+                  if checkbox:
+                      print("Found checkbox, attempting to click...")
+                      time.sleep(1) # 稍微等待，模拟人类反应
+                      checkbox.click()
+                      print("Clicked!")
+                  else:
+                      print("Checkbox not found via simple selector.")
+          except Exception as e:
+              print(f"Auto-click logic info: {e}")
+
+          print("--- Browser is Ready. Please control via VNC. ---")
+          
+          # 保持运行
+          while True:
+              time.sleep(10)
+          EOF
+
+      - name: Run DrissionPage & Tunnel
         run: |
           export DISPLAY=:99
           
-          # 定义伪装成 Windows 10 的 User Agent
-          WIN_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          # 启动 Python 脚本
+          python3 bypass.py > browser.log 2>&1 &
           
-          # 启动 Chrome
-          # --no-sandbox: Docker 必须
-          # --disable-blink-features=AutomationControlled: 核心反爬，隐藏自动化特征
-          # --start-maximized: 全屏
-          # --user-agent: 伪装身份
-          
-          nohup google-chrome-stable \
-            --no-sandbox \
-            --disable-dev-shm-usage \
-            --start-maximized \
-            --disable-infobars \
-            --disable-blink-features=AutomationControlled \
-            --user-agent="$WIN_UA" \
-            --user-data-dir=/tmp/chrome_profile \
-            "https://bot.sannysoft.com/" > chrome.log 2>&1 &
-            
-          echo "Chrome launched via command line."
-
-      - name: Start Cloudflare Tunnel
-        run: |
-          # 使用 Cloudflare 穿透，无需验证 IP，无需配置
+          # 启动 Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
-          
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Starting Tunnel..."
-          sleep 10
-          
+          sleep 8
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ Failed to get tunnel URL."
-            cat tunnel.log
-            exit 1
-          fi
-
           echo "=========================================================="
-          echo "🕵️‍♂️ 原生 Chrome 远程桌面已就绪"
-          echo ""
-          echo "🔗 访问地址 (点击即用):"
-          echo "$TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          echo ""
-          echo "💡 已自动打开 bot.sannysoft.com 进行指纹自测"
+          echo "🛡️ DrissionPage 增强版浏览器已启动"
+          echo "👉 这个版本使用了 DP 库，比原生 Chrome 更容易过盾"
+          echo "🔗 VNC 地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
-
-      - name: Keep Alive (Check Chrome)
-        run: |
-          echo "Checking if Chrome is running..."
-          sleep 5
-          if pgrep chrome > /dev/null; then
-            echo "✅ Chrome is running. Keeping session alive for 20 mins..."
-            sleep 1200
-          else
-            echo "❌ Chrome crashed. Showing logs:"
-            cat chrome.log
-            exit 1
-          fi
+          
+          # 实时打印浏览器日志，方便你看 DrissionPage 的操作
+          tail -f browser.log
