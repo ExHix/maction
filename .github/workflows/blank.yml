@@ -1,37 +1,34 @@
-name: MacOS System Info Check
+name: Nested MacOS Virtualization (Tart)
 
-# 设置触发条件：推送到 main 分支或手动触发
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
-  check-system:
-    # 使用最新版本的 macOS 运行环境
-    runs-on: macos-latest
+  run-vm:
+    # 必须使用 macos-14 或 macos-15 (Apple Silicon 芯片)
+    runs-on: macos-14
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Install Tart
+        run: brew install tart
 
-      - name: Print Hello World and System Info
-        shell: bash
+      - name: Pull pre-built macOS Image
+        # 获取一个已经配置好的轻量级 macOS 镜像 (Sequoia)
+        run: tart pull ghcr.io/cirruslabs/macos-sequoia-vanilla:15.1
+
+      - name: Run Script inside VM
         run: |
+          # 创建一个本地运行脚本
+          cat << 'EOF' > guest_script.sh
           echo "-------------------------------"
-          echo "🚀 Hello World from GitHub Actions!"
-          echo "-------------------------------"
-          
-          echo "📍 Current User: $(whoami)"
-          echo "💻 System Version:"
+          echo "🚀 Hello from INSIDE the VM!"
           sw_vers
-          
-          echo -e "\n📂 Hardware Overview:"
-          system_profiler SPHardwareDataType | grep -E "Model Name|Processor Name|Total Number of Cores|Memory"
-          
-          echo -e "\n🌐 Network Config:"
-          ifconfig en0 | grep "status"
-          
-          echo -e "\n📅 Current Date & Time:"
-          date
+          whoami
           echo "-------------------------------"
+          EOF
+          
+          chmod +x guest_script.sh
+
+          # 使用 tart 运行虚拟机并执行脚本
+          # 注意：在 CI 中运行 VM 非常消耗资源，可能会很慢
+          tart run ghcr.io/cirruslabs/macos-sequia-vanilla:latest --command "bash" < guest_script.sh
