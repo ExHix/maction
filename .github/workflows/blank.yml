@@ -1,9 +1,9 @@
-name: Manual IPA Download & Artifact
+name: Firefox Allowed-Ads VNC
 on: 
   workflow_dispatch:
 
 jobs:
-  ipa-downloader:
+  firefox-user:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
@@ -13,13 +13,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装 Firefox, VNC, 和 zip 工具
-      - name: Install Environment
+      # 1. 安装基础环境
+      - name: Install System & Firefox
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim
           
           add-apt-repository -y ppa:mozillateam/ppa
           
@@ -40,7 +40,7 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 2. 创建普通用户并配置 Firefox
+      # 2. 创建用户 & 配置“允许广告”的 Profile
       - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
@@ -53,30 +53,44 @@ jobs:
           IsRelative=1
           Path=stealth.default
           Default=1
+          
           [General]
           StartWithLastProfile=1
           Version=2
           EOF"
           
-          # 写入允许广告和追踪的 user.js
+          # 核心修改：写入允许广告和追踪的 user.js
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
+          // 1. 基础反爬 (保持不变)
           user_pref(\"dom.webdriver.enabled\", false);
+          user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
+          
+          // 2. 必须禁用的隐私保护 (修复 AdBlock 检测)
+          // 关闭增强跟踪保护
           user_pref(\"privacy.trackingprotection.enabled\", false);
-          user_pref(\"network.cookie.cookieBehavior\", 0);
+          user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
+          user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
+          user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
+          user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
+          
+          // 允许所有 Cookie (很多广告依赖第三方 Cookie)
+          user_pref(\"network.cookie.cookieBehavior\", 0); // 0 = Accept all
+          user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
+          
+          // 3. 其他可能触发检测的设置
+          user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
+          user_pref(\"dom.disable_open_during_load\", false); // 允许弹窗 (有些广告是弹窗)
+          
+          // 4. 保持 WebRTC 关闭 (防止 IP 泄露，如果广告一定需要 WebRTC 才能加载，这里可能需要改回 true)
           user_pref(\"media.peerconnection.enabled\", false);
           EOF"
-          
-          # 创建下载目录
-          su appuser -c "mkdir -p /home/appuser/Downloads"
 
-      # 3. 启动桌面和 Firefox
-      - name: Start Desktop & Firefox
+      # 3. 启动桌面
+      - name: Start Desktop (As User)
         run: |
-          # 启动系统服务
           service dbus start || true
           
-          # 创建并运行桌面启动脚本
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
@@ -87,23 +101,28 @@ jobs:
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
+          
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
-          
-          # 创建并运行浏览器启动脚本
+          sleep 3
+
+      # 4. 启动 Firefox
+      - name: Launch Firefox & Tunnel
+        run: |
           cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 打开目标 URL
-          firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" &
+          # 替换成你的目标网址
+          nohup firefox --no-remote --new-instance "https://nowsecure.nl" > /home/appuser/firefox.log 2>&1 &
           EOF
+          
           chmod +x /home/appuser/run_firefox.sh
           su appuser -c "/home/appuser/run_firefox.sh"
-
-      # 4. 启动隧道并显示链接
-      - name: Start Tunnel & Show Link
-        run: |
+          
+          echo "Firefox launching..."
+          sleep 5
+          
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
@@ -111,14 +130,15 @@ jobs:
           echo "Waiting for Tunnel..."
           sleep 10
           
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0.9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "✅ 环境就绪, 请开始手动操作"
+          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          echo "⏳ 等待下载 IPA 文件中... (超时时间 15 分钟)"
           echo "=========================================================="
           
+          tail -f /home/appuser/firefox.log
+    
       # 5. 核心步骤：监控下载并校验
       - name: Monitor Download (Wait for IPA)
         run: |
