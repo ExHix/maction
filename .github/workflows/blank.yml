@@ -26,7 +26,7 @@ jobs:
 
       - name: Pull pre-built macOS Image
         # 获取一个已经配置好的轻量级 macOS 镜像 (Sequoia)
-        run: tart clone ghcr.io/cirruslabs/macos-sequoia-base:15.1 sequoia-15-1
+        run: tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:15.1 sequoia-15-1
 
       - name: Run Script inside VM
         run: |
