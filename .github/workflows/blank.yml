@@ -8,7 +8,7 @@ on:
 jobs:
   run-vm:
     # 必须使用 macos-14 或 macos-15 (Apple Silicon 芯片)
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Install Tart
