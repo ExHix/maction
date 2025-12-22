@@ -1,4 +1,4 @@
-name: Debug Playwright VNC
+name: Debug Playwright VNC (Fixed)
 on: 
   workflow_dispatch:
 
@@ -13,12 +13,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Dependencies & Python Playwright
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
+          # 安装系统工具
           apt-get install -y xvfb fluxbox x11vnc python3 python3-pip git net-tools curl ca-certificates procps
+          
+          # 关键修复：安装 Python 版 Playwright
+          pip3 install playwright
+          
+          # 确保安装了匹配的浏览器内核 (防止版本不匹配报错)
+          python3 -m playwright install chromium
           
           # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
@@ -36,6 +43,7 @@ jobs:
           try:
               with sync_playwright() as p:
                   print("--- [PYTHON] Launching Chromium... ---")
+                  # 注意：这里去掉了 executable_path，让它使用 playwright install 下载的版本，最稳妥
                   browser = p.chromium.launch(
                       headless=False,
                       args=[
@@ -48,6 +56,7 @@ jobs:
                   )
                   print("--- [PYTHON] Browser launched object created ---")
                   
+                  # 使用 None viewport 配合 start-maximized 实现全屏
                   context = browser.new_context(viewport=None)
                   page = context.new_page()
                   
@@ -55,9 +64,9 @@ jobs:
                   page.goto("https://www.google.com")
                   print("--- [PYTHON] Page Title:", page.title())
                   
-                  # 尝试截图验证
+                  # 截图验证
                   page.screenshot(path="debug_screenshot.png")
-                  print("--- [PYTHON] Screenshot taken (Internal check) ---")
+                  print("--- [PYTHON] Screenshot taken ---")
 
                   print("--- [PYTHON] Entering Keep-Alive Loop ---")
                   while True:
@@ -72,59 +81,47 @@ jobs:
           # 1. 启动 Xvfb
           Xvfb :99 -screen 0 1280x800x24 &
           export DISPLAY=:99
-          echo "Xvfb started on :99"
           
-          # 2. 启动 Fluxbox
+          # 2. 启动 Fluxbox (窗口管理器)
           fluxbox &
-          echo "Fluxbox started"
           
           # 3. 启动 VNC
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
-          echo "VNC Server started"
-
+          
           # 4. 启动 noVNC
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
-          echo "noVNC started"
+
+      - name: 🔴 RUN BROWSER & SHOW LOGS
+        run: |
+          export DISPLAY=:99
+          
+          echo "Starting python script..."
+          python3 run_browser.py > browser_output.txt 2>&1 &
+          PID=$!
+          
+          echo "Waiting 15 seconds for browser start..."
+          sleep 15
+          
+          echo "==================== BROWSER LOGS ===================="
+          cat browser_output.txt
+          echo "======================================================"
+          
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "❌ CRITICAL: Browser script crashed again."
+            exit 1
+          else
+            echo "✅ Browser script is running! Process ID: $PID"
+          fi
 
       - name: Start Cloudflare Tunnel
         run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
-
-      - name: 🔴 RUN BROWSER & SHOW LOGS
-        run: |
-          export DISPLAY=:99
           
-          echo "Starting python script in background..."
-          # 关键修改：直接运行并重定向输出，不使用 nohup
-          python3 run_browser.py > browser_output.txt 2>&1 &
-          PID=$!
-          echo "Python Process ID: $PID"
-          
-          echo "Waiting 10 seconds for browser to initialize..."
-          sleep 10
-          
-          echo "==================== BROWSER LOGS START ===================="
-          cat browser_output.txt
-          echo "==================== BROWSER LOGS END   ===================="
-          
-          echo "Checking active processes..."
-          ps aux | grep -E "python|chrome|playwright"
-          
-          # 如果进程死掉了，让 Action 报错退出
-          if ! kill -0 $PID 2>/dev/null; then
-            echo "❌ CRITICAL: Browser script has crashed!"
-            exit 1
-          else
-            echo "✅ Browser script is still running."
-          fi
-
-      - name: Get Tunnel URL
-        run: |
-          sleep 5
+          sleep 8
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo "🔗  访问地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "🔗 访问地址: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
 
       - name: Keep Alive
         run: sleep 1200
