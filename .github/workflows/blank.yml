@@ -1,9 +1,9 @@
-name: Manual Download & Auto-Archive
+name: Manual IPA Download & Artifact
 on: 
   workflow_dispatch:
 
 jobs:
-  download-ipa:
+  ipa-downloader:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
@@ -13,13 +13,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装环境 (包含 zip 工具)
-      - name: Install System & Firefox
+      # 1. 安装 Firefox, VNC, 和 zip 工具
+      - name: Install Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim zip
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip
           
           add-apt-repository -y ppa:mozillateam/ppa
           
@@ -40,133 +40,141 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 2. 配置自动下载 Profile
-      - name: Setup User & Auto-Download Profile
+      # 2. 创建普通用户并配置 Firefox
+      - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
           
-          su appuser -c "mkdir -p /home/appuser/Downloads"
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
           [Profile0]
-          Name=default; IsRelative=1; Path=stealth.default; Default=1
+          Name=default
+          IsRelative=1
+          Path=stealth.default
+          Default=1
           [General]
-          StartWithLastProfile=1; Version=2
+          StartWithLastProfile=1
+          Version=2
           EOF"
           
-          # 核心修改：添加自动下载配置
+          # 写入允许广告和追踪的 user.js
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
-          // 反爬 & 隐私设置
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
           user_pref(\"privacy.trackingprotection.enabled\", false);
           user_pref(\"network.cookie.cookieBehavior\", 0);
-          
-          // --- 自动下载配置 ---
-          // 0=桌面, 1=系统下载, 2=自定义
-          user_pref(\"browser.download.folderList\", 2);
-          // 指定下载目录
-          user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
-          user_pref(\"browser.download.useDownloadDir\", true);
-          // 对这些类型的文件不弹窗，直接保存 (ipa本质是zip)
-          user_pref(\"browser.helperApps.neverAsk.saveToDisk\", \"application/octet-stream,application/zip,application/x-zip,application/x-zip-compressed\");
+          user_pref(\"media.peerconnection.enabled\", false);
           EOF"
+          
+          # 创建下载目录
+          su appuser -c "mkdir -p /home/appuser/Downloads"
 
-      # 3. 启动桌面
-      - name: Start Desktop
+      # 3. 启动桌面和 Firefox
+      - name: Start Desktop & Firefox
         run: |
+          # 启动系统服务
           service dbus start || true
           
-          su appuser -c 'export DISPLAY=:99 && export HOME=/home/appuser && Xvfb :99 -screen 0 1280x800x24 & sleep 2 && fluxbox &'
+          # 创建并运行桌面启动脚本
+          cat <<EOF > /home/appuser/run_desktop.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 2
+          fluxbox &
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
-          sleep 3
-
-      # 4. 启动 Firefox, 隧道, 和下载监控
-      - name: Launch Firefox, Tunnel & Monitor
-        run: |
-          # 创建监控脚本
-          cat <<EOF > /home/appuser/monitor.sh
-          #!/bin/bash
-          echo "Starting download monitor..."
-          while true; do
-            # 查找小于100MB的ipa文件
-            IPA_FILE=\$(find /home/appuser/Downloads -name "*.ipa" -size -100M -type f -print -quit)
-            
-            if [ -n "\$IPA_FILE" ]; then
-              echo "Detected file: \$IPA_FILE"
-              # 等待5秒，确认文件大小不再变化
-              SIZE1=\$(stat -c%s "\$IPA_FILE")
-              sleep 5
-              SIZE2=\$(stat -c%s "\$IPA_FILE")
-
-              if [ "\$SIZE1" -eq "\$SIZE2" ]; then
-                echo "Download appears complete. Verifying integrity..."
-                # 校验IPA文件 (zip完整性测试)
-                if zip -T "\$IPA_FILE"; then
-                  echo "IPA file is valid. Signaling completion."
-                  # 将文件路径写入 GITHUB_ENV 供后续步骤使用
-                  echo "IPA_PATH=\$IPA_FILE" >> \$GITHUB_ENV
-                  # 创建信号文件
-                  touch /tmp/download_complete
-                  break
-                else
-                  echo "Error: IPA file is corrupt. Continuing scan..."
-                  rm -f "\$IPA_FILE" # 删除坏文件
-                fi
-              fi
-            fi
-            sleep 5
-          done
           EOF
+          chmod +x /home/appuser/run_desktop.sh
+          su appuser -c "/home/appuser/run_desktop.sh"
           
-          chmod +x /home/appuser/monitor.sh
-          
-          # 启动所有服务
-          su appuser -c 'export DISPLAY=:99 && export HOME=/home/appuser && nohup firefox --no-remote "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &'
-          su appuser -c '/home/appuser/monitor.sh > /home/appuser/monitor.log 2>&1 &'
-          
-          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && dpkg -i cloudflared.deb
+          # 创建并运行浏览器启动脚本
+          cat <<EOF > /home/appuser/run_firefox.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          # 打开目标 URL
+          firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" &
+          EOF
+          chmod +x /home/appuser/run_firefox.sh
+          su appuser -c "/home/appuser/run_firefox.sh"
+
+      # 4. 启动隧道并显示链接
+      - name: Start Tunnel & Show Link
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          sleep 8
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo "✅ VNC Ready: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-
-      # 5. 等待下载或超时 (20分钟)
-      - name: Wait for Download or Timeout
-        id: wait_for_download
+          echo "Waiting for Tunnel..."
+          sleep 10
+          
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0.9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          
+          echo "=========================================================="
+          echo "✅ 环境就绪, 请开始手动操作"
+          echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "⏳ 等待下载 IPA 文件中... (超时时间 15 分钟)"
+          echo "=========================================================="
+          
+      # 5. [核心] 监控下载并验证
+      - name: Monitor for IPA Download
+        id: monitor_download # 给这一步一个ID，方便后面引用它的输出
         run: |
-          echo "Waiting for you to download the file... (Timeout: 20 minutes)"
-          for i in {1..240}; do
-            if [ -f /tmp/download_complete ]; then
-              echo "✅ Download complete signal received!"
-              echo "downloaded=true" >> $GITHUB_OUTPUT
-              exit 0
+          # 设置超时时间 (180 次 * 5 秒 = 900 秒 = 15 分钟)
+          TIMEOUT=180
+          COUNT=0
+          
+          echo "Monitoring /home/appuser/Downloads for an IPA file..."
+          
+          while [ $COUNT -lt $TIMEOUT ]; do
+            # 以 appuser 身份查找文件
+            # -maxdepth 1: 只在当前目录查找
+            # -size -100M: 小于 100MB
+            IPA_FILE=$(su appuser -c 'find /home/appuser/Downloads -maxdepth 1 -type f -name "*.ipa" -size -100M' | head -n 1)
+            
+            if [ -n "$IPA_FILE" ]; then
+              echo "✅ Found potential IPA file: $IPA_FILE"
+              echo "Checking file integrity..."
+              
+              # IPA 是 zip 格式，用 unzip -t 测试完整性
+              # -t: test, -qq: quiet quiet (无输出除非报错)
+              if unzip -tqq "$IPA_FILE"; then
+                echo "✅ File integrity confirmed. Download complete."
+                # 将文件路径输出，供下一步使用
+                echo "ipa_path=$IPA_FILE" >> $GITHUB_OUTPUT
+                exit 0
+              else
+                echo "❌ File is corrupted or still downloading. Retrying..."
+              fi
             fi
+            
             sleep 5
+            COUNT=$((COUNT + 1))
           done
-          echo "❌ Timed out after 20 minutes."
-          echo "downloaded=false" >> $GITHUB_OUTPUT
+          
+          echo "❌ Timed out after 15 minutes. No valid IPA file was downloaded."
           exit 1
+          
+      # 6. 上传产物
+      - name: Upload IPA Artifact
+        if: success() # 只有在 monitor 成功时才运行
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-ipa # 产物的名字
+          path: ${{ steps.monitor_download.outputs.ipa_path }} # 使用上一步输出的文件路径
+          retention-days: 1 # 产物保留1天
 
-      # 6. 关闭所有服务 (无论成功失败都执行)
-      - name: Shutdown Services
+      # 7. 清理 (无论成功失败都执行)
+      - name: Cleanup Processes
         if: always()
         run: |
-          echo "Shutting down all services..."
+          echo "Cleaning up background processes..."
+          # 强制杀死所有相关进程
           pkill -f firefox || true
           pkill -f x11vnc || true
           pkill -f Xvfb || true
           pkill -f fluxbox || true
-          pkill -f cloudflared || true
-
-      # 7. 上传 IPA 文件
-      - name: Upload IPA Artifact
-        if: steps.wait_for_download.outputs.downloaded == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: downloaded-ipa
-          path: ${{ env.IPA_PATH }}
-          retention-days: 5```
+          echo "Cleanup complete."
