@@ -188,8 +188,33 @@ jobs:
           
           echo "Download complete and verified. Stopping session."
 
-      # 6. 上传产物
+      # 6. (新) 准备产物
+      # 显式查找并移动文件到工作目录，防止路径为空或权限问题
+      - name: Prepare Artifact
+        run: |
+          echo "📂 Listing Downloads directory..."
+          ls -lh /home/appuser/Downloads/
+          
+          # 查找 IPA 文件
+          FOUND_FILE=$(find /home/appuser/Downloads -name "*.ipa" -print -quit)
+          
+          if [ -z "$FOUND_FILE" ]; then
+            echo "❌ Error: No IPA file found in /home/appuser/Downloads"
+            exit 1
+          fi
+          
+          echo "✅ Found file: $FOUND_FILE"
+          
+          # 将文件复制到当前工作区根目录 (GITHUB_WORKSPACE)
+          # 这样 upload-artifact 可以直接使用文件名，避免绝对路径问题
+          cp "$FOUND_FILE" ./final_app.ipa
+          
+          echo "🚀 Ready to upload: ./final_app.ipa"
+
+      # 7. 上传产物
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: decrypted-app
+          path: final_app.ipa  # 直接指定刚才重命名的文件，不再使用变量
+          if-no-files-found: error
