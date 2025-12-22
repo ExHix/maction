@@ -1,4 +1,4 @@
-name: Windows RDP Crawler (Fixed)
+name: Windows RDP Crawler (Final Fix)
 on: 
   workflow_dispatch:
 
@@ -34,8 +34,8 @@ jobs:
           print('--- Starting Windows Chrome ---')
           try:
               with sync_playwright() as p:
-                  # 启动 Chrome
-                  browser = p.chromium.launch(headless=False, args=["--start-maximized"])
+                  # Use channel='chrome' to look more like a real user
+                  browser = p.chromium.launch(headless=False, channel="chrome", args=["--start-maximized"])
                   context = browser.new_context(viewport=None)
                   page = context.new_page()
                   
@@ -45,7 +45,7 @@ jobs:
                   except:
                       pass
                   
-                  print('--- Browser Ready. Keep Alive... ---')
+                  print('--- Browser Ready. Waiting for RDP... ---')
                   while True:
                       time.sleep(10)
           except Exception as e:
@@ -62,31 +62,28 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -value 1
 
-      # --- 关键修复部分开始 ---
-      - name: Start Ngrok Tunnel (With Retry)
+      - name: Start Ngrok Tunnel (English Logs)
         shell: powershell
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
           if ($env:NGROK_AUTH_TOKEN -eq "") {
-            Write-Error "❌ 错误: 请先在 GitHub Secrets 中配置 NGROK_AUTH_TOKEN"
+            Write-Error "Error: NGROK_AUTH_TOKEN is missing in GitHub Secrets."
             exit 1
           }
           
-          # 下载 Ngrok
+          # Download Ngrok
           Invoke-WebRequest -Uri https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
           Expand-Archive ngrok.zip -DestinationPath . -Force
           
-          # 配置 Token
+          # Config Token
           .\ngrok.exe config add-authtoken $env:NGROK_AUTH_TOKEN
           
-          # 启动 Ngrok 并将日志输出到文件
-          # 使用 --log=stdout 确保日志被写入文件
+          # Start Tunnel
           Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -RedirectStandardOutput ngrok.log -RedirectStandardError ngrok.log -WindowStyle Hidden -PassThru
           
           Write-Host "Waiting for Ngrok tunnel to initialize..."
           
-          # 循环重试获取 URL (最多尝试 20 次，每次 1 秒)
           $url = $null
           for ($i=1; $i -le 20; $i++) {
             try {
@@ -94,31 +91,33 @@ jobs:
               $url = $response.tunnels[0].public_url
               if ($url) { break }
             } catch {
-              Write-Host "Attempt $i: Ngrok API not ready yet..."
+              # Fixed variable syntax here: ${i}
+              Write-Host "Attempt ${i}: Ngrok API not ready yet..."
               Start-Sleep -Seconds 1
             }
           }
 
           if (-not $url) {
-            Write-Error "❌ 无法获取隧道 URL。Ngrok 可能启动失败。"
-            Write-Host "=== Ngrok Log Content ==="
-            Get-Content ngrok.log
+            Write-Error "Failed to get tunnel URL. Ngrok might have failed to start."
+            if (Test-Path ngrok.log) {
+              Write-Host "=== Ngrok Log Content ==="
+              Get-Content ngrok.log
+            }
             exit 1
           }
           
-          # 清理 URL 前缀
+          # Clean URL
           $cleanUrl = $url -replace "tcp://", ""
           
           Write-Host "======================================================"
-          Write-Host "✅ Windows RDP 启动成功！"
+          Write-Host "✅ Windows RDP Ready!"
           Write-Host ""
-          Write-Host "👉 连接地址 (Computer): $cleanUrl"
-          Write-Host "👉 用户名 (User): runneradmin"
-          Write-Host "👉 密码 (Password): SecretPass123!"
+          Write-Host "👉 Address: $cleanUrl"
+          Write-Host "👉 Username: runneradmin"
+          Write-Host "👉 Password: SecretPass123!"
           Write-Host ""
-          Write-Host "⚠️ 注意: 如果连接失败，请检查你的 Ngrok 账号是否已验证邮箱 (TCP隧道需要验证)。"
+          Write-Host "⚠️ Note: Make sure your Ngrok account has email verified."
           Write-Host "======================================================"
-      # --- 关键修复部分结束 ---
 
       - name: Run Browser & Keep Alive
         shell: powershell
