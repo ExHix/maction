@@ -1,4 +1,4 @@
-name: Playwright Web VNC (Browser Remote Control)
+name: Playwright Web VNC (Stable)
 on: 
   workflow_dispatch:
 
@@ -15,79 +15,77 @@ jobs:
 
       - name: Install GUI & VNC Tools
         env:
-          DEBIAN_FRONTEND: noninteractive # 修复 tzdata 卡住的问题
+          DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装 X11, 窗口管理器, VNC server
           apt-get install -y --no-install-recommends xvfb fluxbox x11vnc python3 python3-pip git net-tools curl ca-certificates
           
-          # 下载 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
 
-      - name: Get Public IP
-        id: public_ip
-        run: |
-          IP=$(curl -s https://api.ipify.org)
-          echo "Runner Public IP: $IP"
-          echo "ip=$IP" >> $GITHUB_OUTPUT
-
       - name: Start Desktop Environment
         run: |
-          # 1. 启动虚拟屏幕 :99
+          # 1. 启动虚拟屏幕
           Xvfb :99 -screen 0 1280x720x24 &
           export DISPLAY=:99
           
           # 2. 启动窗口管理器
           fluxbox &
           
-          # 3. 启动 VNC Server (密码设为 secret)
+          # 3. 启动 VNC Server
           x11vnc -display :99 -forever -passwd secret -bg
           
-          # 4. 启动 noVNC (6080 转 5900)
+          # 4. 启动 noVNC (后台运行)
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           
-          echo "Desktop environment started."
+          # 关键：等待端口 6080 启动成功，避免隧道连不上
+          echo "Waiting for noVNC to be ready..."
+          for i in {1..10}; do
+            if netstat -tuln | grep 6080; then
+              echo "noVNC is ready!"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Launch Browser
         run: |
           export DISPLAY=:99
-          # 启动 Playwright Codegen (带界面的浏览器)
           nohup npx playwright codegen wikipedia.org &
-          
-      - name: Start Tunnel & Show Link
-        env:
-          RUNNER_IP: ${{ steps.public_ip.outputs.ip }}
-        run: |
-          npm install -g localtunnel
 
-          # 启动穿透
-          lt --port 6080 > tunnel.log 2>&1 &
+      - name: Start Cloudflare Tunnel
+        run: |
+          # 下载 Cloudflare Tunnel 客户端
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          dpkg -i cloudflared.deb
+
+          # 启动隧道 (无需登录，使用临时隧道)
+          # 将日志输出到文件以便提取 URL
+          cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Waiting for tunnel URL..."
+          echo "Starting tunnel..."
           sleep 5
           
-          # 提取 URL
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.loca\.lt" tunnel.log | head -1)
+          # 提取 trycloudflare.com 的 URL
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           if [ -z "$TUNNEL_URL" ]; then
-            echo "Error: Failed to get tunnel URL."
+            echo "Error: Failed to get tunnel URL. Logs:"
             cat tunnel.log
             exit 1
           fi
 
-          # 构建直达链接
+          # 拼接 VNC 路径
           VNC_URL="$TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
 
           echo "=========================================================="
-          echo "🖥️  浏览器远程桌面已就绪！"
+          echo "🚀 远程桌面已就绪 (Cloudflare 版 - 更稳定)"
           echo ""
-          echo "1️⃣  【必须】验证 IP: 点击链接输入下方 IP"
-          echo "👉  GitHub Runner IP: $RUNNER_IP"
+          echo "🔗 访问地址 (直接点击):"
+          echo "$VNC_URL"
           echo ""
-          echo "2️⃣  访问地址: $VNC_URL"
-          echo "    (如果点击后白屏，请点击左侧侧边栏 -> Settings -> Scaling Mode -> Local Scaling)"
+          echo "💡 提示: 无需验证 IP，直接访问即可。"
           echo "=========================================================="
 
       - name: Keep Alive (20 min)
