@@ -137,7 +137,7 @@ jobs:
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
           
-          # tail -f /home/appuser/firefox.log
+          tail -f /home/appuser/firefox.log
     
       # 5. 核心步骤：监控下载并校验
       - name: Monitor Download (Wait for IPA)
