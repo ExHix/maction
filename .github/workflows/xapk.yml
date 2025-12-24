@@ -1,10 +1,7 @@
 name: Repack XAPK and Clean Manifest
 
 on:
-  workflow_dispatch: # 允许手动点击按钮触发
-  push:
-    paths:
-      - 'res/6.1.0.zip.00*' # 监听文件变化
+  workflow_dispatch: 
 
 jobs:
   repack-clean-sign:
@@ -33,7 +30,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y p7zip-full
           
-          # 手动安装最新版 Apktool (apt源版本过旧，不支持高版本Android)
           wget https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O apktool
           wget https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O apktool.jar
           chmod +x apktool
@@ -64,6 +60,7 @@ jobs:
         with:
           repository: LuigiVampa92/xapk-to-apk
           path: xapk-tool-repo
+          ref: 4b34f1728815b00c04d2e8170b5728513e8a09cf  # pinned
 
       # 7. 运行转换脚本 (XAPK -> APK)
       - name: Convert XAPK to APK
@@ -85,23 +82,19 @@ jobs:
           cd build_dir
           echo "Patching AndroidManifest.xml..."
           
-          # 使用 sed 删除指定属性
-          # 1. 删除 android:isSplitRequired="true" (及任何值的该属性)
+          # remove:
+          # android:isSplitRequired="true"
+          # android:requiredSplitTypes="base__abi"
+          # android:extractNativeLibs="true"
           sed -i -E 's/android:isSplitRequired="[^"]*"//g' AndroidManifest.xml
-          
-          # 2. 删除 android:requiredSplitTypes="base__abi" (及任何值的该属性)
           sed -i -E 's/android:requiredSplitTypes="[^"]*"//g' AndroidManifest.xml
-          
-          # 3. 删除 android:extractNativeLibs="true" (按要求删除)
           sed -i -E 's/android:extractNativeLibs="[^"]*"//g' AndroidManifest.xml
           
-          # 打印部分内容验证修改 (可选)
           grep "application" AndroidManifest.xml || true
           
           cd ..
           
           echo "Rebuilding..."
-          # 回编译
           apktool b build_dir -o 6.1.0-clean-unsigned.apk
 
       # 9. 签名 (默认 Key)
@@ -115,11 +108,11 @@ jobs:
 
           # 签名 (输出最终文件)
           apksigner sign --ks debug.keystore --ks-pass pass:android \
-            --key-pass pass:android --out 6.1.0-repacked.apk 6.1.0-clean-unsigned.apk
+            --key-pass pass:android --out 6.1.0.apk 6.1.0-clean-unsigned.apk
 
       # 10. 上传产物
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 6.1.0-Repacked-APK
-          path: 6.1.0-repacked.apk
+          name: 6.1.0-merged-apk
+          path: 6.1.0.apk
