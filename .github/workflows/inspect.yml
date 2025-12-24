@@ -27,9 +27,11 @@ jobs:
           echo "Current user: $(whoami)"
           echo "Current directory: $(pwd)"
 
-          apt install 7z
-          mv UnityFramework /root/workspace/
-
+          apt install p7zip-full
+          7z e /root/repo/res/UnityFramework.7z
+          
+          mv /root/repo/res/UnityFramework /root/workspace/
+          
       - name: Docker Operations
         run: |
           # echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
