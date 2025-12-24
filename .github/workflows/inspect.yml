@@ -27,12 +27,17 @@ jobs:
           echo "Current user: $(whoami)"
           echo "Current directory: $(pwd)"
 
+          apt install 7z
+          mv UnityFramework /root/workspace/
+
       - name: Docker Operations
         run: |
           # echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
           #IMAGE_URL="ghcr.io/${{ github.repository_owner }}/your-image:latest"
           IMAGE_URL="ghcr.io/exhix/rev-genius:9.2"
+          echo "::add-mask::$IMAGE_URL"
+          
           docker pull $IMAGE_URL
 
           docker run -d --name idap --network none \
@@ -41,16 +46,20 @@ jobs:
             tail -f /dev/null
           docker exec idap cp picture_decoder /root/workspace/
           docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
-          
+
+          ls /root/workspace
           rm /root/workspace/picture_decoder
+          rm /root/workspace/UnityFramework
           
           cp -r /root/workspace /home/workspace
           chmod -R 777 /home/workspace
-          
+        
+          ls /home/workspace
           echo "Finished"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: workspace-output
+          name: outcome
           path: /home/workspace
+          retention-days: 5
