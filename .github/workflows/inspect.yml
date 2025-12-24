@@ -1,61 +1,131 @@
-name: Root Execution Workflow
+name: Unzip XAPK and Build Debug APK
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动触发
 
 jobs:
-  build:
+  build-and-sign:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: sudo bash {0}
 
     steps:
+      # 1. 检出你的代码仓库
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # 2. 检出转换工具
+      - name: Checkout xapk-to-apk tool
+        uses: actions/checkout@v4
         with:
-          path: temp_repo
+          repository: LuigiVampa92/xapk-to-apk
+          path: tools/xapk-to-apk
 
-      - name: Setup Environment
+      # 3. 设置 Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # 4. 设置 Android 环境 (用于 apksigner 和 zipalign)
+      - name: Setup Android SDK Build Tools
+        uses: android-actions/setup-android@v3
+
+      # 5. 解压分卷 Zip 获取 XAPK
+      - name: Extract Split Zip
         run: |
-          mkdir -p /root/repo
-          cp -r temp_repo/. /root/repo/
-          mkdir -p /root/workspace
-          
-          echo "Current user: $(whoami)"
-          echo "Current directory: $(pwd)"
+          # 安装 7zip 用于处理分卷压缩 (.001, .002...)
+          sudo apt-get update && sudo apt-get install -y p7zip-full
 
-          7z e /root/repo/res/UnityFramework.7z
-          mv UnityFramework /root/workspace/
-          
-      - name: Docker Operations
+          echo "Looking for split files in res/..."
+          ls -l res/
+
+          # 创建临时目录
+          mkdir -p build_temp
+
+          # 解压分卷。通常只需指定第一个文件 (.001)，7z会自动寻找后续部分
+          # 如果你的命名是 .zip.001, .zip.002 请确保路径正确
+          if [ -f "res/6.1.0.zip.001" ]; then
+            7z x "res/6.1.0.zip.001" -obuild_temp
+          elif [ -f "res/6.1.0.zip" ]; then
+            unzip "res/6.1.0.zip" -d build_temp
+          else
+             # 尝试直接合并（如果 7z 无法识别特定的命名格式）
+             cat res/6.1.0.zip.* > merged.zip
+             unzip merged.zip -d build_temp
+          fi
+
+          # 检查解压结果
+          echo "Contents of build_temp:"
+          ls -R build_temp/
+
+          # 验证 XAPK 是否存在
+          if [ -f "build_temp/6.1.0.xapk" ]; then
+            echo "XAPK extracted successfully."
+          else
+            echo "Error: 6.1.0.xapk not found inside the zip!"
+            exit 1
+          fi
+
+      # 6. 运行转换脚本 (XAPK -> APK)
+      - name: Convert XAPK to APK
+        id: convert
         run: |
-          # echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
-          #IMAGE_URL="ghcr.io/${{ github.repository_owner }}/your-image:latest"
-          IMAGE_URL="ghcr.io/exhix/rev-genius:9.2"
-          echo "::add-mask::$IMAGE_URL"
+          # 运行 python 脚本
+          # 注意：该脚本通常会在输入文件的同级目录生成 APK
+          python tools/xapk-to-apk/xapk-to-apk.py build_temp/6.1.0.xapk
 
-          echo "Pulling docker..."
-          docker pull -q $IMAGE_URL
-          echo "Pulling Finished"
-          
-          docker run -d --name idap --network none \
-            -v /root/workspace:/root/workspace \
-            -w /opt/ida $IMAGE_URL \
-            tail -f /dev/null
-          docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/UnityFramework | tee /root/workspace/output.log
+          # 检查生成的 APK (通常脚本会把 .xapk 后缀改为 .apk)
+          if [ -f "build_temp/6.1.0.apk" ]; then
+            echo "apk_path=build_temp/6.1.0.apk" >> $GITHUB_OUTPUT
+            echo "Conversion successful."
+          else
+            echo "Error: APK not generated."
+            ls -R build_temp/
+            exit 1
+          fi
 
-      - name: Clean up
+      # 7. 生成默认的 Debug Keystore
+      - name: Generate Debug Keystore
         run: |
-          rm /root/workspace/UnityFramework
-          
-          cp -r /root/workspace /home/workspace
-          chmod -R 777 /home/workspace
+          # 使用 keytool 生成一个临时的 debug keystore
+          # 密码默认为 android，别名默认为 androiddebugkey
+          keytool -genkey -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Upload Artifact
+      # 8. 对齐并使用 Debug Keystore 签名
+      - name: Align and Sign APK
+        run: |
+          BUILD_TOOLS_VERSION=$(ls $ANDROID_SDK_ROOT/build-tools/ | sort -V | tail -n 1)
+          ANDROID_TOOLS_PATH="$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS_VERSION"
+          
+          INPUT_APK="${{ steps.convert.outputs.apk_path }}"
+          ALIGNED_APK="build_temp/6.1.0-aligned.apk"
+          SIGNED_APK="build_temp/6.1.0-debug.apk"
+
+          # 1. Zipalign
+          "$ANDROID_TOOLS_PATH/zipalign" -v -p 4 "$INPUT_APK" "$ALIGNED_APK"
+
+          # 2. Sign with Debug Keystore
+          "$ANDROID_TOOLS_PATH/apksigner" sign \
+            --ks debug.keystore \
+            --ks-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --key-pass pass:android \
+            --out "$SIGNED_APK" \
+            "$ALIGNED_APK"
+          
+          echo "signed_apk_path=$SIGNED_APK" >> $GITHUB_ENV
+
+      # 9. 上传最终 Artifact
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: outcome
-          path: /home/workspace
-          retention-days: 5
+          name: 6.1.0-debug-apk
+          path: ${{ env.signed_apk_path }}
+          retention-days: 7
