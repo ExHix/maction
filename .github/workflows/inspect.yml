@@ -6,7 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 设置全局默认使用 sudo bash 执行脚本
     defaults:
       run:
         shell: sudo bash {0}
@@ -19,7 +18,6 @@ jobs:
 
       - name: Setup Environment
         run: |
-          # 此时已经是 root 身份，无需 sudo
           mkdir -p /root/repo
           cp -r temp_repo/. /root/repo/
           mkdir -p /root/workspace
@@ -28,7 +26,6 @@ jobs:
           echo "Current directory: $(pwd)"
 
           7z e /root/repo/res/UnityFramework.7z
-          ls 
           mv UnityFramework /root/workspace/
           
       - name: Docker Operations
@@ -39,7 +36,7 @@ jobs:
           IMAGE_URL="ghcr.io/exhix/rev-genius:9.2"
           echo "::add-mask::$IMAGE_URL"
           
-          docker pull $IMAGE_URL
+          docker pull -q $IMAGE_URL
 
           docker run -d --name idap --network none \
             -v /root/workspace:/root/workspace \
@@ -48,7 +45,8 @@ jobs:
           docker exec idap cp picture_decoder /root/workspace/
           docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
 
-          ls /root/workspace
+      - name: Clean up
+        run: |
           rm /root/workspace/picture_decoder
           rm /root/workspace/UnityFramework
           
@@ -56,7 +54,6 @@ jobs:
           chmod -R 777 /home/workspace
         
           ls /home/workspace
-          echo "Finished"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
