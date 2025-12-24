@@ -39,14 +39,13 @@ jobs:
             -v /root/workspace:/root/workspace \
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
-          docker exec idap cp picture_decoder /root/repo/workspace/
+          docker exec idap cp picture_decoder /root/workspace/
           docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
           
           rm /root/workspace/picture_decoder
           
-          rm -rf /home/
-          cp /root/workspace /home
-          chmod -R 777 /home
+          cp -r /root/workspace /home/workspace
+          chmod -R 777 /home/workspace
           
           echo "Finished"
 
@@ -54,4 +53,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: workspace-output
-          path: /home
+          path: /home/workspace
