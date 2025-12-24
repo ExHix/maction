@@ -1,0 +1,108 @@
+name: Merge & Repack XAPK to APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  convert-and-sign:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        # with:
+        #   lfs: true # 如果你的分卷文件是通过 Git LFS 存储的，必须开启此选项
+
+      - name: Checkout xapk-to-apk Tool
+        uses: actions/checkout@v4
+        with:
+          repository: LuigiVampa92/xapk-to-apk
+          path: tools/xapk-to-apk
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Dependencies (Apktool & Build Tools)
+        run: |
+          # 1. 配置 Android Build Tools
+          BUILD_TOOLS_PATH=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          echo "Using Android Build Tools: $BUILD_TOOLS_PATH"
+          echo "$BUILD_TOOLS_PATH" >> $GITHUB_PATH
+          
+          # 2. 安装 Apktool
+          APKTOOL_VER="2.10.0"
+          wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool
+          wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_$APKTOOL_VER.jar -O apktool.jar
+          chmod +x apktool apktool.jar
+          sudo mv apktool /usr/local/bin/
+          sudo mv apktool.jar /usr/local/bin/
+
+      - name: Merge Split Files
+        run: |
+          ls
+          echo "Checking for split files in res/..."
+          
+          # 定义输出文件名
+          MERGED_FILE="res/target.xapk"
+          
+          # 检查是否存在 .001 文件 (作为分卷存在的标志)
+          if ls res/*.001 1> /dev/null 2>&1; then
+            echo "Found split volume files. Merging..."
+            
+            # 使用 cat 配合通配符和 sort 确保按顺序 (001, 002...) 合并
+            # 注意：这里假设文件位于 res/ 目录下
+            cat $(ls res/*.00* | sort) > "$MERGED_FILE"
+            
+            echo "Merge complete."
+          elif [ -f "res/target.xapk" ]; then
+            echo "Found existing single xapk file, skipping merge."
+          else
+            echo "Error: No valid split files (*.001) or target.xapk found in res/."
+            ls -R res/
+            exit 1
+          fi
+          
+          # 打印文件大小确认
+          ls -lh "$MERGED_FILE"
+
+      - name: Convert XAPK to APK
+        run: |
+          # 脚本将处理上一步合并好的 res/target.xapk
+          python tools/xapk-to-apk/xapktoapk.py res/target.xapk
+
+      - name: Sign APK
+        run: |
+          # 转换后的文件名通常在同级目录，脚本可能生成 target.apk
+          OUTPUT_APK="res/target.apk"
+          
+          if [ ! -f "$OUTPUT_APK" ]; then
+            echo "Error: Output APK not found at $OUTPUT_APK"
+            exit 1
+          fi
+
+          echo "Signing $OUTPUT_APK..."
+
+          # 生成 Debug Keystore
+          keytool -genkey -v -keystore debug.keystore \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          # 签名
+          apksigner sign --ks debug.keystore \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            "$OUTPUT_APK"
+          
+          # 验证
+          apksigner verify "$OUTPUT_APK"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: converted-apk
+          path: res/target.apk
