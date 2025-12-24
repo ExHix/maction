@@ -1,0 +1,51 @@
+name: Root Execution Workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 设置全局默认使用 sudo bash 执行脚本
+    defaults:
+      run:
+        shell: sudo bash {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: temp_repo
+
+      - name: Setup Environment
+        run: |
+          # 此时已经是 root 身份，无需 sudo
+          mkdir -p /root/repo
+          cp -r temp_repo/. /root/repo/
+          mkdir -p /root/workspace
+          
+          echo "Current user: $(whoami)"
+          echo "Current directory: $(pwd)"
+
+      - name: Docker Operations
+        run: |
+          # echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+          #IMAGE_URL="ghcr.io/${{ github.repository_owner }}/your-image:latest"
+          IMAGE_URL="ghcr.io/exhix/rev-genius:9.2"
+          docker pull $IMAGE_URL
+
+          docker run -d --name idap --network none \
+            -v /root/workspace:/root/workspace \
+            -w /opt/ida $IMAGE_URL
+          docker exec -it idap cp picture_decoder /root/repo/workspace/
+          docker exec -it idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
+          
+          rm /root/workspace/picture_decoder
+          chmod -R 777 /root/workspace
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-output
+          path: /root/workspace
