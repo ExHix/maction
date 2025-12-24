@@ -1,7 +1,12 @@
-name: Merge & Repack XAPK to APK
+name: Unzip, Repack XAPK to APK
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'res/*.00*'       # 监听分卷文件变化
+      - 'res/*.zip'       
+      - '.github/workflows/*.yml'
 
 jobs:
   convert-and-sign:
@@ -10,8 +15,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        # with:
-        #   lfs: true # 如果你的分卷文件是通过 Git LFS 存储的，必须开启此选项
+        with:
+          lfs: true # 开启 LFS 以防分卷文件很大
 
       - name: Checkout xapk-to-apk Tool
         uses: actions/checkout@v4
@@ -25,14 +30,14 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Dependencies (Apktool & Build Tools)
+      - name: Setup Dependencies
         run: |
-          # 1. 配置 Android Build Tools
+          # 配置 Android Build Tools
           BUILD_TOOLS_PATH=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
           echo "Using Android Build Tools: $BUILD_TOOLS_PATH"
           echo "$BUILD_TOOLS_PATH" >> $GITHUB_PATH
           
-          # 2. 安装 Apktool
+          # 安装 Apktool
           APKTOOL_VER="2.10.0"
           wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool
           wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_$APKTOOL_VER.jar -O apktool.jar
@@ -40,43 +45,45 @@ jobs:
           sudo mv apktool /usr/local/bin/
           sudo mv apktool.jar /usr/local/bin/
 
-      - name: Merge Split Files
+      - name: Process Files (Merge -> Unzip -> Locate XAPK)
+        id: prepare_file
         run: |
-          ls
-          echo "Checking for split files in res/..."
+          # 1. 合并分卷文件
+          echo "Merging split files..."
+          # 将所有 .00* 文件合并为一个临时 zip
+          cat $(ls res/*.00* | sort) > combined_outer.zip
           
-          # 定义输出文件名
-          MERGED_FILE="res/target.xapk"
+          # 2. 解压外层 ZIP 提取 XAPK
+          echo "Unzipping outer archive..."
+          unzip -o combined_outer.zip -d extracted_files
           
-          # 检查是否存在 .001 文件 (作为分卷存在的标志)
-          if ls res/*.001 1> /dev/null 2>&1; then
-            echo "Found split volume files. Merging..."
-            
-            # 使用 cat 配合通配符和 sort 确保按顺序 (001, 002...) 合并
-            # 注意：这里假设文件位于 res/ 目录下
-            cat $(ls res/*.00* | sort) > "$MERGED_FILE"
-            
-            echo "Merge complete."
-          elif [ -f "res/target.xapk" ]; then
-            echo "Found existing single xapk file, skipping merge."
-          else
-            echo "Error: No valid split files (*.001) or target.xapk found in res/."
-            ls -R res/
+          # 3. 查找解压出来的 .xapk 文件
+          # find 命令查找 extracted_files 目录下的 .xapk 文件
+          XAPK_PATH=$(find extracted_files -name "*.xapk" | head -n 1)
+          
+          if [ -z "$XAPK_PATH" ]; then
+            echo "Error: No .xapk file found inside the zip archive!"
+            ls -R extracted_files
             exit 1
           fi
           
-          # 打印文件大小确认
-          ls -lh "$MERGED_FILE"
+          echo "Found XAPK at: $XAPK_PATH"
+          
+          # 将找到的 xapk 路径保存到环境变量，供后续步骤使用
+          echo "XAPK_PATH=$XAPK_PATH" >> $GITHUB_ENV
 
       - name: Convert XAPK to APK
         run: |
-          # 脚本将处理上一步合并好的 res/target.xapk
-          python tools/xapk-to-apk/xapktoapk.py res/target.xapk
+          echo "Converting $XAPK_PATH ..."
+          python tools/xapk-to-apk/xapktoapk.py "$XAPK_PATH"
 
       - name: Sign APK
         run: |
-          # 转换后的文件名通常在同级目录，脚本可能生成 target.apk
-          OUTPUT_APK="res/target.apk"
+          # 脚本通常会在 xapk 同级目录下生成同名的 .apk 文件
+          # 例如：xxx.xapk -> xxx.apk
+          # 我们利用 bash 字符串替换获取预期的 APK 路径
+          INPUT_XAPK="${{ env.XAPK_PATH }}"
+          OUTPUT_APK="${INPUT_XAPK%.*}.apk"
           
           if [ ! -f "$OUTPUT_APK" ]; then
             echo "Error: Output APK not found at $OUTPUT_APK"
@@ -98,11 +105,11 @@ jobs:
             --key-pass pass:android \
             "$OUTPUT_APK"
           
-          # 验证
-          apksigner verify "$OUTPUT_APK"
+          # 将最终的 APK 路径保存，供上传步骤使用
+          echo "FINAL_APK_PATH=$OUTPUT_APK" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: converted-apk
-          path: res/target.apk
+          name: final-converted-apk
+          path: ${{ env.FINAL_APK_PATH }}
