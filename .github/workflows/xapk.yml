@@ -1,134 +1,112 @@
-name: Unzip XAPK and Build Debug APK
+name: Repack XAPK to APK
 
 on:
-  workflow_dispatch: # 手动触发
-  push:
-    paths:
-      - 'res/6.1.0.zip.*' # 监听分卷文件变化
+  workflow_dispatch: # 允许手动触发
 
 jobs:
-  build-and-sign:
+  repack-and-sign:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 检出你的代码仓库
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. 检出转换工具
-      - name: Checkout xapk-to-apk tool
+      - name: Setup Java (Required for apktool & signer)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install dependencies (7z & Apktool)
+        run: |
+          # 更新 apt 并安装 7zip
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+          
+          # 安装最新版 Apktool (apt源的版本通常太旧)
+          wget https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O apktool
+          wget https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O apktool.jar
+          chmod +x apktool
+          sudo mv apktool /usr/local/bin/
+          sudo mv apktool.jar /usr/local/bin/
+          
+          # 验证 apktool 安装
+          apktool -version
+
+      - name: Setup Android Build Tools Path
+        run: |
+          # 查找已安装的 build-tools 路径并添加到 PATH
+          BUILD_TOOLS_DIR=$(find $ANDROID_HOME/build-tools -maxdepth 1 -type d | sort -V | tail -n 1)
+          echo "Found build-tools at: $BUILD_TOOLS_DIR"
+          echo "$BUILD_TOOLS_DIR" >> $GITHUB_PATH
+          
+          # 验证 zipalign 和 apksigner 是否可用
+          $BUILD_TOOLS_DIR/zipalign --version || echo "zipalign found"
+
+      - name: Extract XAPK from Split Zip
+        run: |
+          # 确保 res 目录存在
+          if [ ! -d "res" ]; then
+            echo "Error: res directory not found!"
+            exit 1
+          fi
+          
+          # 解压分卷 zip (只需指定第一个文件 .001，7z 会自动处理后续部分)
+          # -o 指定输出目录为当前工作目录
+          7z x res/6.1.0.zip.001 -o./
+          
+          # 检查解压结果
+          if [ -f "6.1.0.xapk" ]; then
+            echo "Successfully extracted 6.1.0.xapk"
+          else
+            echo "Error: 6.1.0.xapk not found after extraction!"
+            ls -R
+            exit 1
+          fi
+
+      - name: Checkout Converter Tool
         uses: actions/checkout@v4
         with:
           repository: LuigiVampa92/xapk-to-apk
-          path: tools/xapk-to-apk
+          path: xapk-tool-repo
 
-      # 3. 设置 Python
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      # 4. 设置 Android 环境 (用于 apksigner 和 zipalign)
-      - name: Setup Android SDK Build Tools
-        uses: android-actions/setup-android@v3
-
-      # 5. 解压分卷 Zip 获取 XAPK
-      - name: Extract Split Zip
+      - name: Run XAPK to APK Conversion
         run: |
-          # 安装 7zip 用于处理分卷压缩 (.001, .002...)
-          sudo apt-get update && sudo apt-get install -y p7zip-full
+          # 运行转换脚本
+          # 脚本依赖：apktool, zipalign (已在 PATH 中)
+          python3 xapk-tool-repo/xapktoapk.py 6.1.0.xapk
+          
+          echo "Conversion finished. Checking files..."
+          ls -lh
 
-          echo "Looking for split files in res/..."
-          ls -l res/
-
-          # 创建临时目录
-          mkdir -p build_temp
-
-          # 解压分卷。通常只需指定第一个文件 (.001)，7z会自动寻找后续部分
-          # 如果你的命名是 .zip.001, .zip.002 请确保路径正确
-          if [ -f "res/6.1.0.zip.001" ]; then
-            7z x "res/6.1.0.zip.001" -obuild_temp
-          elif [ -f "res/6.1.0.zip" ]; then
-            unzip "res/6.1.0.zip" -d build_temp
-          else
-             # 尝试直接合并（如果 7z 无法识别特定的命名格式）
-             cat res/6.1.0.zip.* > merged.zip
-             unzip merged.zip -d build_temp
-          fi
-
-          # 检查解压结果
-          echo "Contents of build_temp:"
-          ls -R build_temp/
-
-          # 验证 XAPK 是否存在
-          if [ -f "build_temp/6.1.0.xapk" ]; then
-            echo "XAPK extracted successfully."
-          else
-            echo "Error: 6.1.0.xapk not found inside the zip!"
+      - name: Sign APK (Default Debug Keystore)
+        run: |
+          # 查找转换生成的 APK (通常同名，但后缀为 .apk)
+          INPUT_APK="6.1.0.apk"
+          SIGNED_APK="6.1.0-signed.apk"
+          
+          if [ ! -f "$INPUT_APK" ]; then
+            echo "Error: $INPUT_APK not found. Conversion might have failed."
             exit 1
           fi
 
-      # 6. 运行转换脚本 (XAPK -> APK)
-      - name: Convert XAPK to APK
-        id: convert
-        run: |
-          # 运行 python 脚本
-          # 注意：该脚本通常会在输入文件的同级目录生成 APK
-          python tools/xapk-to-apk/xapk-to-apk.py build_temp/6.1.0.xapk
-
-          # 检查生成的 APK (通常脚本会把 .xapk 后缀改为 .apk)
-          if [ -f "build_temp/6.1.0.apk" ]; then
-            echo "apk_path=build_temp/6.1.0.apk" >> $GITHUB_OUTPUT
-            echo "Conversion successful."
-          else
-            echo "Error: APK not generated."
-            ls -R build_temp/
-            exit 1
-          fi
-
-      # 7. 生成默认的 Debug Keystore
-      - name: Generate Debug Keystore
-        run: |
-          # 使用 keytool 生成一个临时的 debug keystore
-          # 密码默认为 android，别名默认为 androiddebugkey
-          keytool -genkey -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
+          # 1. 生成默认 Debug Keystore
+          echo "Generating debug keystore..."
+          keytool -genkey -v -keystore debug.keystore \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      # 8. 对齐并使用 Debug Keystore 签名
-      - name: Align and Sign APK
-        run: |
-          BUILD_TOOLS_VERSION=$(ls $ANDROID_SDK_ROOT/build-tools/ | sort -V | tail -n 1)
-          ANDROID_TOOLS_PATH="$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS_VERSION"
-          
-          INPUT_APK="${{ steps.convert.outputs.apk_path }}"
-          ALIGNED_APK="build_temp/6.1.0-aligned.apk"
-          SIGNED_APK="build_temp/6.1.0-debug.apk"
+          # 2. 签名 (apksigner 会自动处理 zip 对齐检查，但为了保险我们也可以先手动对齐)
+          echo "Signing APK..."
+          apksigner sign --ks debug.keystore --ks-pass pass:android \
+            --key-pass pass:android --out "$SIGNED_APK" "$INPUT_APK"
+            
+          echo "Verify signature..."
+          apksigner verify "$SIGNED_APK"
 
-          # 1. Zipalign
-          "$ANDROID_TOOLS_PATH/zipalign" -v -p 4 "$INPUT_APK" "$ALIGNED_APK"
-
-          # 2. Sign with Debug Keystore
-          "$ANDROID_TOOLS_PATH/apksigner" sign \
-            --ks debug.keystore \
-            --ks-pass pass:android \
-            --ks-key-alias androiddebugkey \
-            --key-pass pass:android \
-            --out "$SIGNED_APK" \
-            "$ALIGNED_APK"
-          
-          echo "signed_apk_path=$SIGNED_APK" >> $GITHUB_ENV
-
-      # 9. 上传最终 Artifact
-      - name: Upload Debug APK
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 6.1.0-debug-apk
-          path: ${{ env.signed_apk_path }}
-          retention-days: 7
+          name: Repacked-APK-6.1.0
+          path: 6.1.0-signed.apk
