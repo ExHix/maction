@@ -38,11 +38,12 @@ jobs:
           docker run -d --name idap --network none \
             -v /root/workspace:/root/workspace \
             -w /opt/ida $IMAGE_URL
-          docker exec -it idap cp picture_decoder /root/repo/workspace/
-          docker exec -it idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
+          docker exec idap cp picture_decoder /root/repo/workspace/
+          docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
           
           rm /root/workspace/picture_decoder
           chmod -R 777 /root/workspace
+          echo "Finished"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
