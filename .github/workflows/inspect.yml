@@ -35,25 +35,23 @@ jobs:
           #IMAGE_URL="ghcr.io/${{ github.repository_owner }}/your-image:latest"
           IMAGE_URL="ghcr.io/exhix/rev-genius:9.2"
           echo "::add-mask::$IMAGE_URL"
-          
-          docker pull -q $IMAGE_URL
 
+          echo "Pulling docker..."
+          docker pull -q $IMAGE_URL
+          echo "Pulling Finished"
+          
           docker run -d --name idap --network none \
             -v /root/workspace:/root/workspace \
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
-          docker exec idap cp picture_decoder /root/workspace/
-          docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/picture_decoder | tee /root/workspace/output.log
+          docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/UnityFramework | tee /root/workspace/output.log
 
       - name: Clean up
         run: |
-          rm /root/workspace/picture_decoder
           rm /root/workspace/UnityFramework
           
           cp -r /root/workspace /home/workspace
           chmod -R 777 /home/workspace
-        
-          ls /home/workspace
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
