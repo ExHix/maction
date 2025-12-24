@@ -1,28 +1,15 @@
-name: Unzip, Repack XAPK to APK
+name: Make Universal APK (x86 & ARM)
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'res/*.00*'       # 监听分卷文件变化
-      - 'res/*.zip'       
-      - '.github/workflows/*.yml'
 
 jobs:
-  convert-and-sign:
+  universal-repack:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          lfs: true # 开启 LFS 以防分卷文件很大
-
-      - name: Checkout xapk-to-apk Tool
-        uses: actions/checkout@v4
-        with:
-          repository: LuigiVampa92/xapk-to-apk
-          path: tools/xapk-to-apk
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -30,14 +17,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Dependencies
+      - name: Setup Build Tools & Apktool
         run: |
-          # 配置 Android Build Tools
+          # 1. 设置 Android Build Tools
           BUILD_TOOLS_PATH=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
-          echo "Using Android Build Tools: $BUILD_TOOLS_PATH"
           echo "$BUILD_TOOLS_PATH" >> $GITHUB_PATH
           
-          # 安装 Apktool
+          # 2. 安装最新版 Apktool (处理 Split APK 需要较新版本)
           APKTOOL_VER="2.10.0"
           wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool
           wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_$APKTOOL_VER.jar -O apktool.jar
@@ -45,54 +31,87 @@ jobs:
           sudo mv apktool /usr/local/bin/
           sudo mv apktool.jar /usr/local/bin/
 
-      - name: Process Files (Merge -> Unzip -> Locate XAPK)
-        id: prepare_file
+      - name: Prepare & Unzip XAPK
+        id: unzip_xapk
         run: |
-          # 1. 合并分卷文件
+          # 合并分卷
           echo "Merging split files..."
-          # 将所有 .00* 文件合并为一个临时 zip
-          cat $(ls res/*.00* | sort) > combined_outer.zip
+          cat $(ls res/*.00* | sort) > temp_combined.zip
           
-          # 2. 解压外层 ZIP 提取 XAPK
-          echo "Unzipping outer archive..."
-          unzip -o combined_outer.zip -d extracted_files
+          # 解压最外层
+          unzip -o temp_combined.zip -d xapk_content
           
-          # 3. 查找解压出来的 .xapk 文件
-          # find 命令查找 extracted_files 目录下的 .xapk 文件
-          XAPK_PATH=$(find extracted_files -name "*.xapk" | head -n 1)
+          # 找到里面的 .xapk 文件
+          XAPK_FILE=$(find xapk_content -name "*.xapk" | head -n 1)
+          echo "Found XAPK: $XAPK_FILE"
           
-          if [ -z "$XAPK_PATH" ]; then
-            echo "Error: No .xapk file found inside the zip archive!"
-            ls -R extracted_files
+          # 解压 .xapk 到 workspace 目录 (XAPK 本质是 ZIP)
+          unzip -o "$XAPK_FILE" -d workspace
+          
+          # 检查是否是 Split APK 结构 (含有 base.apk 和 config.*.apk)
+          if [ -f "workspace/base.apk" ]; then
+            echo "Detected Split APK structure."
+          else
+            echo "Error: This looks like an OBB XAPK or unrecognized format. This script handles Split APKs."
+            ls -R workspace
             exit 1
           fi
-          
-          echo "Found XAPK at: $XAPK_PATH"
-          
-          # 将找到的 xapk 路径保存到环境变量，供后续步骤使用
-          echo "XAPK_PATH=$XAPK_PATH" >> $GITHUB_ENV
 
-      - name: Convert XAPK to APK
+      - name: Merge Splits into Universal APK
         run: |
-          echo "Converting $XAPK_PATH ..."
-          python tools/xapk-to-apk/xapktoapk.py "$XAPK_PATH"
+          cd workspace
+          
+          echo "=== 1. Decompiling Base APK ==="
+          apktool d base.apk -o decoded_base
+          
+          echo "=== 2. Merging Libraries and Assets from Splits ==="
+          # 遍历所有 config 开头的 apk
+          for split in config.*.apk; do
+            [ -e "$split" ] || continue
+            echo "Processing split: $split"
+            
+            # 临时解包分片
+            apktool d "$split" -o "decoded_$split"
+            
+            # A. 合并 Native Libraries (.so 文件) - 关键步骤！
+            # 将 x86, x86_64, arm64-v8a 等所有库都拷进去
+            if [ -d "decoded_$split/lib" ]; then
+              echo "  Found libs in $split, copying..."
+              cp -r "decoded_$split/lib/"* "decoded_base/lib/" || true
+            fi
+            
+            # B. 合并 Assets (部分游戏把资源放在 assets 分片里)
+            if [ -d "decoded_$split/assets" ]; then
+              echo "  Found assets in $split, copying..."
+              cp -r "decoded_$split/assets/"* "decoded_base/assets/" || true
+            fi
+            
+            # C. 合并未知的 APK 根目录文件 (如 kotlin 文件夹等)
+            # 注意：不要覆盖 AndroidManifest.xml 和 apktool.yml
+            # 这里简单处理，如果不是 lib/assets/res 就不动，防止冲突
+            
+            # 清理临时解包
+            rm -rf "decoded_$split"
+          done
+          
+          echo "=== 3. Patching AndroidManifest.xml ==="
+          # 去除 isSplitRequired="true" 属性，否则单 APK 无法安装
+          # 去除 splitTypes 等元数据
+          sed -i 's/android:isSplitRequired="true"//g' decoded_base/AndroidManifest.xml
+          sed -i 's/android:extractNativeLibs="false"/android:extractNativeLibs="true"/g' decoded_base/AndroidManifest.xml
+          
+          # (可选) 如果有 Application 节点包含 android:name="com.google.android.play.core.splitcompat.SplitCompatApplication"
+          # 可能需要移除或替换，但在纯 APK 环境下通常保留也没事
+          
+          echo "=== 4. Rebuilding APK ==="
+          apktool b decoded_base -o universal.apk --use-aapt2
+          
+          # 移动到上层准备签名
+          mv universal.apk ../universal.apk
 
       - name: Sign APK
         run: |
-          # 脚本通常会在 xapk 同级目录下生成同名的 .apk 文件
-          # 例如：xxx.xapk -> xxx.apk
-          # 我们利用 bash 字符串替换获取预期的 APK 路径
-          INPUT_XAPK="${{ env.XAPK_PATH }}"
-          OUTPUT_APK="${INPUT_XAPK%.*}.apk"
-          
-          if [ ! -f "$OUTPUT_APK" ]; then
-            echo "Error: Output APK not found at $OUTPUT_APK"
-            exit 1
-          fi
-
-          echo "Signing $OUTPUT_APK..."
-
-          # 生成 Debug Keystore
+          # 生成 Keystore
           keytool -genkey -v -keystore debug.keystore \
             -storepass android -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
@@ -103,13 +122,12 @@ jobs:
             --ks-key-alias androiddebugkey \
             --ks-pass pass:android \
             --key-pass pass:android \
-            "$OUTPUT_APK"
-          
-          # 将最终的 APK 路径保存，供上传步骤使用
-          echo "FINAL_APK_PATH=$OUTPUT_APK" >> $GITHUB_ENV
+            universal.apk
+            
+          apksigner verify universal.apk
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: final-converted-apk
-          path: ${{ env.FINAL_APK_PATH }}
+          name: universal-apk-x86-arm
+          path: universal.apk
