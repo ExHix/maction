@@ -27,10 +27,9 @@ jobs:
           echo "Current user: $(whoami)"
           echo "Current directory: $(pwd)"
 
-          apt install p7zip-full
           7z e /root/repo/res/UnityFramework.7z
-          
-          mv /root/repo/res/UnityFramework /root/workspace/
+          ls 
+          mv UnityFramework /root/workspace/
           
       - name: Docker Operations
         run: |
