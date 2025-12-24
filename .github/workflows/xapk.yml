@@ -1,10 +1,13 @@
-name: Repack XAPK to APK
+name: Repack XAPK to APK (Emulator Fix)
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
+  push:
+    paths:
+      - 'res/6.1.0.zip.00*'
 
 jobs:
-  repack-and-sign:
+  repack-sign-fix:
     runs-on: ubuntu-latest
 
     steps:
@@ -17,52 +20,29 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install dependencies (7z & Apktool)
+      - name: Install dependencies (7z, Apktool, Python)
         run: |
-          # 更新 apt 并安装 7zip
           sudo apt-get update
-          sudo apt-get install -y p7zip-full
+          sudo apt-get install -y p7zip-full python3
           
-          # 安装最新版 Apktool (apt源的版本通常太旧)
+          # 安装最新版 Apktool
           wget https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O apktool
           wget https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O apktool.jar
           chmod +x apktool
           sudo mv apktool /usr/local/bin/
           sudo mv apktool.jar /usr/local/bin/
-          
-          # 验证 apktool 安装
-          apktool -version
 
-      - name: Setup Android Build Tools Path
+      - name: Setup Android Build Tools
         run: |
-          # 查找已安装的 build-tools 路径并添加到 PATH
+          # 找到 build-tools 并加入 PATH (用于 zipalign/apksigner)
           BUILD_TOOLS_DIR=$(find $ANDROID_HOME/build-tools -maxdepth 1 -type d | sort -V | tail -n 1)
-          echo "Found build-tools at: $BUILD_TOOLS_DIR"
           echo "$BUILD_TOOLS_DIR" >> $GITHUB_PATH
-          
-          # 验证 zipalign 和 apksigner 是否可用
-          $BUILD_TOOLS_DIR/zipalign --version || echo "zipalign found"
 
-      - name: Extract XAPK from Split Zip
+      - name: Prepare XAPK
         run: |
-          # 确保 res 目录存在
-          if [ ! -d "res" ]; then
-            echo "Error: res directory not found!"
-            exit 1
-          fi
-          
-          # 解压分卷 zip (只需指定第一个文件 .001，7z 会自动处理后续部分)
-          # -o 指定输出目录为当前工作目录
+          # 解压分卷 zip 得到 xapk
           7z x res/6.1.0.zip.001 -o./
-          
-          # 检查解压结果
-          if [ -f "6.1.0.xapk" ]; then
-            echo "Successfully extracted 6.1.0.xapk"
-          else
-            echo "Error: 6.1.0.xapk not found after extraction!"
-            ls -R
-            exit 1
-          fi
+          if [ ! -f "6.1.0.xapk" ]; then echo "XAPK extract failed"; exit 1; fi
 
       - name: Checkout Converter Tool
         uses: actions/checkout@v4
@@ -70,43 +50,63 @@ jobs:
           repository: LuigiVampa92/xapk-to-apk
           path: xapk-tool-repo
 
-      - name: Run XAPK to APK Conversion
+      - name: Convert XAPK to APK (Initial Merge)
         run: |
-          # 运行转换脚本
-          # 脚本依赖：apktool, zipalign (已在 PATH 中)
+          # 第一步：先让工具完成繁琐的 Split 合并工作
           python3 xapk-tool-repo/xapktoapk.py 6.1.0.xapk
           
-          echo "Conversion finished. Checking files..."
-          ls -lh
+          # 重命名生成的 APK 以便后续处理
+          mv 6.1.0.apk initial_merge.apk
+
+      - name: Patch AndroidManifest for Emulator Compatibility
+        run: |
+          echo "Decompiling to patch manifest..."
+          # 1. 反编译合并后的 APK
+          apktool d -f initial_merge.apk -o decode_dir
+
+          cd decode_dir
+          
+          # 2. 修改 AndroidManifest.xml
+          
+          # 【关键修改1】将所有 'required="true"' 的硬件特性改为 "false"
+          # 这会欺骗模拟器说：虽然我用了这个功能（如触摸屏、相机），但不是必须的。
+          sed -i 's/android:required="true"/android:required="false"/g' AndroidManifest.xml
+          
+          # 【关键修改2】确保 application 标签包含 extractNativeLibs="true"
+          # 这有助于 ARM 转换层在 x86 模拟器上找到 .so 文件
+          if grep -q 'extractNativeLibs="false"' AndroidManifest.xml; then
+            sed -i 's/android:extractNativeLibs="false"/android:extractNativeLibs="true"/g' AndroidManifest.xml
+          elif ! grep -q 'extractNativeLibs' AndroidManifest.xml; then
+            # 如果不存在该属性，尝试在 application 标签末尾插入 (这是一个简单的正则替换，可能需要根据实际 manifest 调整)
+            sed -i 's/<application/<application android:extractNativeLibs="true"/g' AndroidManifest.xml
+          fi
+          
+          # 【可选】移除特定的不兼容特性标签 (如果上面的 required=false 不够用)
+          # sed -i '/android.hardware.telephony/d' AndroidManifest.xml
+
+          cd ..
+          
+          echo "Rebuilding patched APK..."
+          # 3. 回编译
+          apktool b decode_dir -o 6.1.0-patched-unsigned.apk
 
       - name: Sign APK (Default Debug Keystore)
         run: |
-          # 查找转换生成的 APK (通常同名，但后缀为 .apk)
-          INPUT_APK="6.1.0.apk"
-          SIGNED_APK="6.1.0-signed.apk"
-          
-          if [ ! -f "$INPUT_APK" ]; then
-            echo "Error: $INPUT_APK not found. Conversion might have failed."
-            exit 1
-          fi
-
-          # 1. 生成默认 Debug Keystore
-          echo "Generating debug keystore..."
+          # 生成 Keystore
           keytool -genkey -v -keystore debug.keystore \
             -storepass android -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          # 2. 签名 (apksigner 会自动处理 zip 对齐检查，但为了保险我们也可以先手动对齐)
-          echo "Signing APK..."
+          # 签名 (同时会自动进行 zipalign)
           apksigner sign --ks debug.keystore --ks-pass pass:android \
-            --key-pass pass:android --out "$SIGNED_APK" "$INPUT_APK"
+            --key-pass pass:android --out 6.1.0-final.apk 6.1.0-patched-unsigned.apk
             
-          echo "Verify signature..."
-          apksigner verify "$SIGNED_APK"
+          # 验证
+          apksigner verify 6.1.0-final.apk
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Repacked-APK-6.1.0
-          path: 6.1.0-signed.apk
+          name: Repacked-Emulator-Friendly-APK
+          path: 6.1.0-final.apk
