@@ -1,27 +1,33 @@
-name: Firefox Allowed-Ads VNC & Playwright
+name: Firefox Allowed-Ads VNC (XFCE4 Desktop)
 
 on: 
   workflow_dispatch:
 
 jobs:
-  firefox-user:
+  firefox-xfce:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 必须开启 privileged，否则沙箱会崩溃
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境
-      - name: Install System & Dependencies
+      # 1. 安装基础环境 (XFCE4 + Firefox + Playwright)
+      - name: Install System & Desktop
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip xterm psmisc
+          # 安装基础工具
+          apt-get install -y software-properties-common wget curl git net-tools sudo vim unzip python3-pip psmisc
+          
+          # 安装 XFCE4 桌面环境 (比 Fluxbox 友好得多) 和 Xterm
+          apt-get install -y xfce4 xfce4-goodies xfce4-terminal
+          
+          # 安装 VNC 和 XServer
+          apt-get install -y xvfb x11vnc dbus-x11 pulseaudio
           
           # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
@@ -29,48 +35,133 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
           
-          # 安装 X11 环境
-          apt-get install -y xvfb fluxbox x11vnc pulseaudio dbus-x11
-          
+          # Playwright 依赖
           echo ">>> Installing Playwright..."
           pip3 install playwright
-          
-          echo ">>> Installing System Dependencies..."
           playwright install-deps
 
-      # 2. 配置用户 & 安装 Firefox
-      - name: Setup User & Install Firefox
+      # 2. 配置用户 & 写入 Python 脚本
+      - name: Setup User & Script
         run: |
           useradd -m -s /bin/bash appuser
           su appuser -c "mkdir -p /home/appuser/Downloads"
           
-          echo ">>> Installing Firefox for AppUser..."
+          # 安装 Firefox 内核 (用户级)
+          echo ">>> Installing Firefox..."
           su appuser -c "playwright install firefox"
           
-          if [ -f "get_ipa.py" ]; then
-            cp get_ipa.py /home/appuser/get_ipa.py
-            
-            # 【关键修复 1】: 注入防止 Docker 崩溃的启动参数
-            # 将 headless=False 替换为 headless=False 加上一堆参数
-            # 这些参数禁止 GPU、禁止沙箱、禁止 WebGL，能极大提高在 CI 里的稳定性
-            sed -i 's/headless=False/headless=False, args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-software-rasterizer", "--disable-setuid-sandbox"]/' /home/appuser/get_ipa.py
-            
-            # 【关键修复 2】: 注入下载等待时间 (防止点击下载后浏览器秒关)
-            sed -i '/browser.close()/i \        import time; print("等待下载缓冲..."); time.sleep(60)' /home/appuser/get_ipa.py
-            
-            chown appuser:appuser /home/appuser/get_ipa.py
-            chmod +x /home/appuser/get_ipa.py
-            
-            echo "✅ Script patched successfully with anti-crash args."
-            # 打印看一下修改后的代码确认 sed 是否生效
-            grep "p.firefox.launch" /home/appuser/get_ipa.py
-          else
-            echo "❌ Error: get_ipa.py not found!"
-            exit 1
-          fi
+          # 写入修改后的 Python 脚本
+          # 使用 'EOF' (带引号) 防止 Shell 解析 $ 符号
+          cat <<'EOF' > /home/appuser/get_ipa.py
+          import json
+          import time
+          import os
+          import sys
+          from playwright.sync_api import sync_playwright
 
-      # 3. 启动桌面
-      - name: Start Desktop Environment
+          def run():
+              base_url = "https://decrypt.day/app/id1489932710"
+              print(f"[Script] 启动 Playwright...")
+              
+              with sync_playwright() as p:
+                  # 启动浏览器 (带防崩溃参数)
+                  browser = p.firefox.launch(
+                      headless=False,
+                      args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-setuid-sandbox"]
+                  )
+                  context = browser.new_context(
+                      user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:120.0) Gecko/20100101 Firefox/120.0",
+                      viewport={"width": 1280, "height": 800},
+                      ignore_https_errors=True
+                  )
+                  # 屏蔽 WebDriver
+                  context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+
+                  page = context.new_page()
+                  print(f"[Script] 打开页面: {base_url}")
+                  
+                  try:
+                      page.goto(base_url, timeout=90000)
+                      page.wait_for_load_state("domcontentloaded")
+                  except Exception as e:
+                      print(f"[Script] 警告: 页面加载可能超时 {e}")
+
+                  if "Just a moment" in page.title() or "Cloudflare" in page.title():
+                      print("\n" + "!"*30)
+                      print("[!] Cloudflare 拦截！请进 VNC 手动验证！")
+                      print("!"*30 + "\n")
+                      time.sleep(30)
+
+                  print("[Script] 获取下载链接配置...")
+                  # JS 注入获取下载参数
+                  try:
+                      js_code = """
+                          async () => {
+                              const formData = new FormData();
+                              formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
+                              const resp = await fetch('""" + base_url + """?/files', {method: 'POST', body: formData});
+                              return await resp.text();
+                          }
+                      """
+                      result = page.evaluate(js_code)
+                      data_json = json.loads(result)
+                      dl_list = json.loads(data_json.get("data", "[]"))
+                      
+                      target_path = ""
+                      # 简单查找逻辑
+                      for item in dl_list:
+                          if isinstance(item, str) and len(item) == 21:
+                              target_path = item
+                              break
+                      
+                      if not target_path and "gofile.io" in dl_list:
+                           idx = dl_list.index("gofile.io")
+                           target_path = dl_list[idx-3]
+
+                      if not target_path:
+                          print("[Script] 未找到自动下载路径，请手动下载。")
+                      else:
+                          dl_url = f"{base_url}/dl/{target_path}"
+                          print(f"[Script] 跳转下载页: {dl_url}")
+                          dl_page = context.new_page()
+                          dl_page.goto(dl_url, referer=base_url)
+                          
+                          # 点击步骤
+                          print("[Script] 点击 'Get download link'...")
+                          dl_page.locator("button.btn-download").filter(has_text="Get download link").click()
+                          time.sleep(3)
+                          
+                          print("[Script] 点击 'Download' 并等待文件...")
+                          # 处理下载事件
+                          with dl_page.expect_download(timeout=60000) as download_info:
+                              dl_page.locator("button.btn-download").filter(has_text="Download").click()
+                          
+                          download = download_info.value
+                          print(f"[Script] 下载开始: {download.suggested_filename}")
+                          
+                          # 保存文件
+                          final_path = os.path.join("/home/appuser/Downloads", download.suggested_filename)
+                          download.save_as(final_path)
+                          print(f"[Script] ✅ 文件保存成功: {final_path}")
+
+                  except Exception as e:
+                      print(f"[Script] 错误: {e}")
+                      import traceback
+                      traceback.print_exc()
+
+                  print("[Script] 保持浏览器开启...")
+                  while True:
+                      time.sleep(10)
+
+          if __name__ == "__main__":
+              run()
+          EOF
+
+          chown appuser:appuser /home/appuser/get_ipa.py
+          chmod +x /home/appuser/get_ipa.py
+
+      # 3. 启动 XFCE4 桌面环境
+      - name: Start XFCE Desktop
         run: |
           service dbus start || true
           
@@ -79,16 +170,24 @@ jobs:
           export DISPLAY=:99
           export HOME=/home/appuser
           
+          # 启动 XServer
           Xvfb :99 -screen 0 1280x800x24 &
           sleep 2
-          fluxbox &
+          
+          # 启动 XFCE4 (更友好的桌面)
+          # 使用 dbus-launch 确保 session 正常
+          dbus-launch --exit-with-session xfce4-session &
+          
+          # 启动 VNC
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
+          
+          # 启动 noVNC
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
-          echo "✅ Desktop Started"
+          echo "✅ XFCE4 Desktop Started"
 
       # 4. 启动 Tunnel
       - name: Start Network Tunnel
@@ -98,45 +197,19 @@ jobs:
           
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Waiting for Tunnel (10s)..."
+          echo "Waiting for Tunnel..."
           sleep 10
           
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "🦊 Firefox VNC Ready"
+          echo "🖥️  XFCE4 桌面环境已就绪"
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "💡 进入后，你会看到类似 Windows 的任务栏和开始菜单。"
+          echo "💡 如果需要手动调试，点击桌面底部的黑色终端图标即可。"
           echo "=========================================================="
 
-      # 5. 单独验证 (加强清理版)
-      - name: Verify Firefox Standalone
-        run: |
-          echo "🧪 Testing Firefox startup..."
-          cat <<EOF > /home/appuser/test_firefox.sh
-          #!/bin/bash
-          export DISPLAY=:99
-          export HOME=/home/appuser
-          nohup firefox "https://www.mozilla.org" > firefox_test.log 2>&1 &
-          EOF
-          
-          chmod +x /home/appuser/test_firefox.sh
-          su appuser -c "/home/appuser/test_firefox.sh"
-          
-          sleep 8
-          
-          if pgrep -u appuser firefox > /dev/null; then
-             echo "✅ Firefox standalone worked."
-             # 【关键修复 3】: 彻底杀死进程，防止残留锁死 Playwright
-             pkill -9 -u appuser firefox || true
-             killall -9 firefox || true
-             sleep 2
-          else
-             echo "❌ Firefox failed to start!"
-             cat /home/appuser/firefox_test.log
-             exit 1
-          fi
-
-      # 6. 运行 Playwright 脚本 (带环境增强)
+      # 5. 运行 Python 脚本
       - name: Run Playwright Script
         run: |
           touch /home/appuser/bot.log
@@ -146,62 +219,52 @@ jobs:
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
-          # 【关键修复 4】: 强制使用软件渲染，防止 GPU 崩溃
+          # 强制软件渲染
           export LIBGL_ALWAYS_SOFTWARE=1
-          export MOZ_CRASHREPORTER_DISABLE=1
           
-          # 启动脚本
           nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
           EOF
           
           chmod +x /home/appuser/run_bot.sh
           su appuser -c "/home/appuser/run_bot.sh"
           
-          echo "🤖 Script started."
+          echo "🤖 Script running..."
 
-      # 7. 监控下载 + 实时日志
-      - name: Monitor Download & Logs
+      # 6. 监控
+      - name: Monitor & Logs
         run: |
           TARGET_DIR="/home/appuser/Downloads"
           LOG_FILE="/home/appuser/bot.log"
           START_TIME=$(date +%s)
           TIMEOUT=1800 
           
-          echo "📝 Streaming logs from $LOG_FILE ..."
-          
+          echo "📝 Streaming logs..."
           tail -f "$LOG_FILE" &
           TAIL_PID=$!
           
           while true; do
             NOW=$(date +%s)
-            ELAPSED=$((NOW - START_TIME))
-            
-            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-               echo "❌ Timeout reached!"
+            if [ $((NOW - START_TIME)) -ge "$TIMEOUT" ]; then
+               echo "❌ Timeout"
                kill $TAIL_PID || true
                exit 1
             fi
             
             FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
-            
             if [ -n "$FILE" ]; then
-               if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
-                  :
-               else
+               if [ ! -f "${FILE}.part" ] && [ ! -f "${FILE}.partjs" ]; then
                   SIZE_MB=$(du -m "$FILE" | cut -f1)
                   if [ "$SIZE_MB" -gt 5 ]; then
-                     echo "✅ Download finished: $FILE ($SIZE_MB MB)"
+                     echo "✅ Success: $FILE ($SIZE_MB MB)"
                      break
                   fi
                fi
             fi
             sleep 3
           done
-          
           kill $TAIL_PID || true
 
-      # 8. 上传
+      # 7. 上传
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
