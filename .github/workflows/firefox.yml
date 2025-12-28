@@ -8,66 +8,66 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+      # 必须开启 privileged 才能正常运行 docker 内的浏览器沙箱
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 (增加 Python, pip, xterm)
+      # 1. 安装基础环境
       - name: Install System & Firefox & Playwright
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装系统级依赖
+          # 安装系统工具 + Python + Pip + Xterm
           apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip xterm
           
-          # 安装 noVNC 相关
+          # 安装 noVNC 和 VNC Server
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
           
-          # 安装 X11 和 VNC
           apt-get install -y xvfb fluxbox x11vnc pulseaudio dbus-x11
           
-          echo ">>> Installing Playwright Python bindings..."
+          echo ">>> Installing Playwright Python Lib..."
           pip3 install playwright
           
-          echo ">>> Installing Playwright System Dependencies (Requires Root)..."
-          # 安装浏览器所需的系统库 (libgtk, libasound 等)
+          echo ">>> Installing Playwright System Dependencies (Root)..."
+          # 安装浏览器运行所需的系统库 (libgtk, libasound 等)
           playwright install-deps firefox
 
-      # 2. 创建用户 & 准备脚本 & 安装用户级 Playwright
+      # 2. 配置用户 & 安装 Playwright 浏览器内核 (关键修复步骤)
       - name: Setup User & Install Browser
         run: |
           useradd -m -s /bin/bash appuser
           
-          # 创建下载目录
+          # 建立下载文件夹
           su appuser -c "mkdir -p /home/appuser/Downloads"
           
-          # 【核心修复】以 appuser 身份安装 Firefox 二进制文件
-          # 这样浏览器才会安装到 /home/appuser/.cache/ms-playwright 目录下
-          echo ">>> Installing Firefox Binary as appuser..."
+          # 【修复】必须以 appuser 身份下载 Firefox 二进制文件
+          # 否则 playwright 运行时去 /home/appuser/.cache/ms-playwright 找不到文件
+          echo ">>> Installing Firefox Binary for AppUser..."
           su appuser -c "playwright install firefox"
           
-          # 移动 Python 脚本
+          # 移动脚本并赋予权限
           if [ -f "get_ipa.py" ]; then
             cp get_ipa.py /home/appuser/get_ipa.py
             chown appuser:appuser /home/appuser/get_ipa.py
             chmod +x /home/appuser/get_ipa.py
           else
-            echo "❌ Error: get_ipa.py not found!"
+            echo "❌ Error: get_ipa.py not found in checkout!"
             exit 1
           fi
 
-      # 3. 启动桌面 & 网络穿透
+      # 3. 启动桌面 & Cloudflare Tunnel (回归原始逻辑)
       - name: Start Desktop & Network Tunnel
         run: |
           service dbus start || true
           
-          # 3.1 启动脚本
+          # 3.1 启动桌面环境
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
@@ -76,67 +76,76 @@ jobs:
           Xvfb :99 -screen 0 1280x800x24 &
           sleep 2
           fluxbox &
-          # 密码设置为 'secret'
+          # VNC 密码: secret
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
+          sleep 3
           
-          # 启动cf tunnel
-          #!/bin/bash
-          export DISPLAY=:99
-          export HOME=/home/appuser
-          
+          # 3.2 启动 Tunnel (完全使用你原始的逻辑)
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
+          
+          # 启动并把日志输出到当前目录
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Waiting for Tunnel..."
-          sleep 10
+          echo "Waiting for Tunnel (Sleeping 15s to be safe)..."
+          sleep 15
           
+          # 提取 URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-                              
-          echo "=========================================================="
-          echo "🚀 VNC 远程链接:"
-          echo "$TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          echo "=========================================================="
+          
+          # 增加一个空值检查，防止只输出后缀
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Failed to grab Tunnel URL. Cloudflared Log:"
+            cat tunnel.log
+            # 这里不退出，方便你进 VNC 调试，但提示错误
+          else
+            echo "=========================================================="
+            echo "🚀 VNC 远程链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+            echo "=========================================================="
+          fi
 
       # 4. 运行 Playwright 脚本 (双向日志)
       - name: Run Playwright Script (Sync Logs)
         run: |
+          # 预创建日志文件
           touch /home/appuser/bot.log
           chmod 666 /home/appuser/bot.log
 
+          # 创建启动脚本
+          # 使用 python3 -u 禁用缓存
+          # 使用 tee 同时输出到 xterm 屏幕和 bot.log
           cat <<EOF > /home/appuser/run_bot.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
           export PATH=$PATH:/home/appuser/.local/bin
           
-          # 启动 xterm 并运行 python，同时将输出 tee 到日志文件
           xterm -geometry 100x30 -bg black -fg green -title "Playwright Automation" -hold -e "python3 -u /home/appuser/get_ipa.py 2>&1 | tee /home/appuser/bot.log" &
           EOF
           
           chmod +x /home/appuser/run_bot.sh
           su appuser -c "/home/appuser/run_bot.sh"
           
-          echo "🤖 Script running in background xterm..."
+          echo "🤖 Script started in background xterm."
 
-      # 5. 监控下载 + 实时日志
+      # 5. 监控下载 + 实时显示脚本日志
       - name: Monitor Download & Logs
         run: |
           TARGET_DIR="/home/appuser/Downloads"
           LOG_FILE="/home/appuser/bot.log"
           START_TIME=$(date +%s)
-          TIMEOUT=1800 # 30分钟超时
+          TIMEOUT=1800 # 30分钟
           
-          # 后台同步日志到 Action 控制台
+          echo "📝 Syncing logs from VNC to here..."
+          
+          # 后台启动 tail，实时搬运日志
           tail -f "$LOG_FILE" &
           TAIL_PID=$!
-          
-          echo "Using 'tail -f' to sync logs. Press Enter in VNC xterm if prompted."
           
           while true; do
             NOW=$(date +%s)
@@ -147,13 +156,12 @@ jobs:
                exit 1
             fi
             
-            # 查找下载完成的 IPA 文件
             FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
             
             if [ -n "$FILE" ]; then
-               # 检查是否包含 .part (下载中)
                if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
-                  : # 下载中，跳过
+                  # 下载中...
+                  :
                else
                   SIZE_MB=$(du -m "$FILE" | cut -f1)
                   if [ "$SIZE_MB" -gt 5 ]; then
@@ -167,7 +175,7 @@ jobs:
           
           kill $TAIL_PID || true
 
-      # 6. 上传
+      # 6. 上传产物
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
