@@ -19,7 +19,7 @@ def run():
 
     with sync_playwright() as p:
         # Setup 
-        browser = p.chromium.launch(
+        browser = p.firefox.launch(
             headless=False
         )
 
@@ -150,4 +150,5 @@ def run():
         browser.close()
 
 if __name__ == "__main__":
+
     run()
