@@ -1,0 +1,206 @@
+name: Firefox Allowed-Ads VNC & Playwright
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  firefox-user:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04
+      # 必须开启 privileged 才能正常运行 docker 内的浏览器沙箱
+      options: --privileged --shm-size=2gb
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. 安装基础环境 (增加 Python, pip, xterm)
+      - name: Install System & Firefox & Playwright
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          # 新增 python3-pip 和 xterm
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip xterm
+          
+          # 1.1 安装系统级 Firefox (作为备用或依赖)
+          add-apt-repository -y ppa:mozillateam/ppa
+          echo '
+          Package: *
+          Pin: release o=LP-PPA-mozillateam
+          Pin-Priority: 1001
+          ' | tee /etc/apt/preferences.d/mozilla-firefox
+          
+          apt-get update
+          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer xvfb fluxbox x11vnc pulseaudio dbus-x11
+          
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
+          fc-cache -f -v
+          
+          # 1.2 安装 noVNC
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
+          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
+          chmod -R 777 /opt/noVNC
+
+          # 1.3 安装 Playwright 及其依赖
+          echo "Installing Playwright..."
+          pip3 install playwright
+          
+          # 安装 Playwright 的 Firefox (和系统依赖)
+          playwright install firefox
+          playwright install-deps firefox
+
+      # 2. 创建用户 & 准备脚本
+      - name: Setup User & Prepare Scripts
+        run: |
+          useradd -m -s /bin/bash appuser
+          
+          # 创建下载目录
+          su appuser -c "mkdir -p /home/appuser/Downloads"
+          
+          # 将仓库里的 get_ipa.py 移动到用户目录，并修复权限
+          if [ -f "get_ipa.py" ]; then
+            cp get_ipa.py /home/appuser/get_ipa.py
+            chown appuser:appuser /home/appuser/get_ipa.py
+            chmod +x /home/appuser/get_ipa.py
+            echo "✅ script moved to /home/appuser/get_ipa.py"
+          else
+            echo "❌ Error: get_ipa.py not found in checkout!"
+            exit 1
+          fi
+
+      # 3. 启动桌面 (Xvfb + Fluxbox + VNC + Cloudflared)
+      - name: Start Desktop & Network Tunnel
+        run: |
+          service dbus start || true
+          
+          # 创建桌面启动脚本
+          cat <<EOF > /home/appuser/run_desktop.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          
+          # 1. 启动虚拟显卡
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 2
+          
+          # 2. 启动窗口管理器 (Fluxbox)
+          fluxbox &
+          
+          # 3. 启动 VNC Server
+          x11vnc -display :99 -forever -passwd secret -bg -noxdamage
+          
+          # 4. 启动 noVNC 代理
+          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+          EOF
+          
+          chmod +x /home/appuser/run_desktop.sh
+          su appuser -c "/home/appuser/run_desktop.sh"
+          sleep 3
+          
+          # 启动 Cloudflare Tunnel
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          dpkg -i cloudflared.deb
+          cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
+          
+          echo "Waiting for Tunnel..."
+          sleep 8
+          
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          
+          echo "=========================================================="
+          echo "🚀 VNC 远程链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "⚠️  注意: Playwright 脚本将在 VNC 内的黑色终端窗口中运行。"
+          echo "⚠️  如果遇到 'Waiting for user operation'，请在 VNC 的黑色窗口中按回车。"
+          echo "=========================================================="
+
+      # 4. 运行 Playwright 脚本 (双向日志模式)
+      - name: Run Playwright Script (Visual + Log Sync)
+        run: |
+          # 1. 预先创建日志文件并赋予权限，防止权限不足
+          touch /home/appuser/bot.log
+          chmod 666 /home/appuser/bot.log
+
+          # 2. 创建运行脚本
+          # 关键修改：
+          # python3 -u : 禁用输出缓存，让日志实时出现
+          # 2>&1       : 把错误输出(stderr)也合并到标准输出
+          # | tee ...  : 神奇的命令，既在终端显示，又写入文件
+          cat <<EOF > /home/appuser/run_bot.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          export PATH=$PATH:/home/appuser/.local/bin
+          
+          xterm -geometry 100x30 -bg black -fg green -title "Playwright Automation" -hold -e "python3 -u /home/appuser/get_ipa.py 2>&1 | tee /home/appuser/bot.log" &
+          EOF
+          
+          chmod +x /home/appuser/run_bot.sh
+          su appuser -c "/home/appuser/run_bot.sh"
+          
+          echo "🤖 Automation script started."
+          echo "📄 Logs are being synced to this console via /home/appuser/bot.log"
+
+      # 5. 监控下载 + 实时打印脚本日志
+      - name: Monitor Download & Sync Logs
+        run: |
+          TARGET_DIR="/home/appuser/Downloads"
+          LOG_FILE="/home/appuser/bot.log"
+          MAX_SIZE_MB=100
+          TIMEOUT_SECONDS=1200
+          START_TIME=$(date +%s)
+          
+          # 【新增】后台启动 tail，将 Python 的日志实时输出到 Action 控制台
+          # & 表示在后台运行，不会阻塞下面的监控循环
+          tail -f "$LOG_FILE" &
+          TAIL_PID=$!
+          
+          echo "Starting monitoring loop for *.ipa in $TARGET_DIR"
+          
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+            
+            # 1. 超时检查
+            if [ "$ELAPSED_TIME" -ge "$TIMEOUT_SECONDS" ]; then
+                echo "❌ Timeout reached. Killing log syncer."
+                kill $TAIL_PID || true
+                exit 1
+            fi
+          
+            # 2. 查找文件
+            FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
+            
+            if [ -n "$FILE" ]; then
+              BASENAME=$(basename "$FILE")
+              
+              if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
+                 # 下载中... (日志里不重复打印，以免刷屏，反正上面有 tail -f 的日志)
+                 : 
+              else
+                 SIZE_MB=$(du -m "$FILE" | cut -f1)
+                 
+                 if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
+                   echo "⚠️ Found $BASENAME but size ($SIZE_MB MB) is too small. Waiting..."
+                 else
+                   echo "✅ Found candidate: $BASENAME ($SIZE_MB MB)"
+                   break
+                 fi
+              fi
+            fi
+            
+            sleep 3
+          done
+          
+          # 停止日志同步
+          kill $TAIL_PID || true
+          echo "Download complete."
+
+      # 6. 上传产物
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: decrypted-app
+          path: /home/appuser/Downloads/*.ipa
