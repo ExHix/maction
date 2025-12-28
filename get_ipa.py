@@ -27,9 +27,9 @@ def run():
         
         context = browser.new_context(
             user_agent=user_agent,
-            viewport={"width": 1280, "height": 800},
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai"
+            #viewport={"width": 1280, "height": 800},
+            #locale="zh-CN",
+            #timezone_id="Asia/Shanghai"
         )
 
         context.add_init_script("""
