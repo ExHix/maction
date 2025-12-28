@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+      # 必须开启 privileged，否则沙箱会崩溃
       options: --privileged --shm-size=2gb
     
     steps:
@@ -20,7 +21,6 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装常用工具 + Python + Pip + 进程管理工具(psmisc)
           apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip xterm psmisc
           
           # 安装 noVNC
@@ -44,29 +44,32 @@ jobs:
           useradd -m -s /bin/bash appuser
           su appuser -c "mkdir -p /home/appuser/Downloads"
           
-          # 以 appuser 身份安装 Firefox 内核
           echo ">>> Installing Firefox for AppUser..."
           su appuser -c "playwright install firefox"
           
-          # 移动并处理 Python 脚本
           if [ -f "get_ipa.py" ]; then
             cp get_ipa.py /home/appuser/get_ipa.py
-            # 【临时补丁】
-            # 因为您的脚本点击下载后会立刻关闭浏览器，导致下载失败。
-            # 这里我用 sed 命令在脚本最后强行插入一段 sleep 60，
-            # 确保浏览器在下载开始后至少存活 60 秒，给下载留出时间。
-            # 如果不需要，您可以注释掉下面这行 sed。
+            
+            # 【关键修复 1】: 注入防止 Docker 崩溃的启动参数
+            # 将 headless=False 替换为 headless=False 加上一堆参数
+            # 这些参数禁止 GPU、禁止沙箱、禁止 WebGL，能极大提高在 CI 里的稳定性
+            sed -i 's/headless=False/headless=False, args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-software-rasterizer", "--disable-setuid-sandbox"]/' /home/appuser/get_ipa.py
+            
+            # 【关键修复 2】: 注入下载等待时间 (防止点击下载后浏览器秒关)
             sed -i '/browser.close()/i \        import time; print("等待下载缓冲..."); time.sleep(60)' /home/appuser/get_ipa.py
             
             chown appuser:appuser /home/appuser/get_ipa.py
             chmod +x /home/appuser/get_ipa.py
-            echo "✅ Script prepared (with 60s wait patch injected)"
+            
+            echo "✅ Script patched successfully with anti-crash args."
+            # 打印看一下修改后的代码确认 sed 是否生效
+            grep "p.firefox.launch" /home/appuser/get_ipa.py
           else
             echo "❌ Error: get_ipa.py not found!"
             exit 1
           fi
 
-      # 3. 启动桌面 (Xvfb + Fluxbox + VNC)
+      # 3. 启动桌面
       - name: Start Desktop Environment
         run: |
           service dbus start || true
@@ -105,39 +108,35 @@ jobs:
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
 
-      # 5. 【新增步骤】单独启动 Firefox 验证环境
+      # 5. 单独验证 (加强清理版)
       - name: Verify Firefox Standalone
         run: |
-          echo "🧪 Testing Firefox startup before running script..."
-          
-          # 创建一个简单的验证脚本，只打开 Firefox 并加载 Mozilla 官网
+          echo "🧪 Testing Firefox startup..."
           cat <<EOF > /home/appuser/test_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 在后台启动 Firefox
           nohup firefox "https://www.mozilla.org" > firefox_test.log 2>&1 &
           EOF
           
           chmod +x /home/appuser/test_firefox.sh
           su appuser -c "/home/appuser/test_firefox.sh"
           
-          echo "⏳ Waiting 10 seconds to ensure Firefox GUI renders..."
-          sleep 10
+          sleep 8
           
-          # 检查进程是否存在
           if pgrep -u appuser firefox > /dev/null; then
-             echo "✅ Firefox process is running correctly!"
-             echo "Closing test instance..."
-             pkill -u appuser firefox
+             echo "✅ Firefox standalone worked."
+             # 【关键修复 3】: 彻底杀死进程，防止残留锁死 Playwright
+             pkill -9 -u appuser firefox || true
+             killall -9 firefox || true
              sleep 2
           else
-             echo "❌ Firefox failed to start! Check logs:"
+             echo "❌ Firefox failed to start!"
              cat /home/appuser/firefox_test.log
              exit 1
           fi
 
-      # 6. 运行 Playwright 脚本
+      # 6. 运行 Playwright 脚本 (带环境增强)
       - name: Run Playwright Script
         run: |
           touch /home/appuser/bot.log
@@ -147,14 +146,19 @@ jobs:
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 禁用 buffering (-u) 并将日志重定向到文件
+          
+          # 【关键修复 4】: 强制使用软件渲染，防止 GPU 崩溃
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export MOZ_CRASHREPORTER_DISABLE=1
+          
+          # 启动脚本
           nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
           EOF
           
           chmod +x /home/appuser/run_bot.sh
           su appuser -c "/home/appuser/run_bot.sh"
           
-          echo "🤖 Script started in background."
+          echo "🤖 Script started."
 
       # 7. 监控下载 + 实时日志
       - name: Monitor Download & Logs
@@ -166,7 +170,6 @@ jobs:
           
           echo "📝 Streaming logs from $LOG_FILE ..."
           
-          # 实时打印日志
           tail -f "$LOG_FILE" &
           TAIL_PID=$!
           
@@ -180,11 +183,9 @@ jobs:
                exit 1
             fi
             
-            # 查找 ipa 文件
             FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
             
             if [ -n "$FILE" ]; then
-               # 排除临时文件
                if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
                   :
                else
@@ -195,7 +196,6 @@ jobs:
                   fi
                fi
             fi
-            
             sleep 3
           done
           
