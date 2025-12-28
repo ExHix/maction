@@ -8,15 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 必须开启 privileged 才能正常运行 docker 内的浏览器沙箱
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境
-      - name: Install System & Firefox & Playwright
+      # 1. 安装基础环境 (Root 权限)
+      - name: Install System & Dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -35,22 +34,23 @@ jobs:
           echo ">>> Installing Playwright Python Lib..."
           pip3 install playwright
           
-          echo ">>> Installing Playwright System Dependencies (Root)..."
-          # 安装浏览器运行所需的系统库 (libgtk, libasound 等)
-          playwright install-deps firefox
+          echo ">>> Installing System Dependencies for Browsers..."
+          # 安装所有浏览器所需的系统依赖 (Root 运行)
+          playwright install-deps
 
-      # 2. 配置用户 & 安装 Playwright 浏览器内核 (关键修复步骤)
-      - name: Setup User & Install Browser
+      # 2. 配置用户 & 安装浏览器内核 (关键修复步骤)
+      - name: Setup User & Install Playwright Browsers
         run: |
           useradd -m -s /bin/bash appuser
           
           # 建立下载文件夹
           su appuser -c "mkdir -p /home/appuser/Downloads"
           
-          # 【修复】必须以 appuser 身份下载 Firefox 二进制文件
-          # 否则 playwright 运行时去 /home/appuser/.cache/ms-playwright 找不到文件
-          echo ">>> Installing Firefox Binary for AppUser..."
-          su appuser -c "playwright install firefox"
+          # 【修复核心】以 appuser 身份运行 install，并安装所有浏览器
+          # 这样无论脚本是用 chromium 还是 firefox，都能找到二进制文件
+          # 且文件会被正确放置在 /home/appuser/.cache/ms-playwright/ 下
+          echo ">>> Installing All Playwright Browsers for AppUser..."
+          su appuser -c "playwright install"
           
           # 移动脚本并赋予权限
           if [ -f "get_ipa.py" ]; then
@@ -62,12 +62,11 @@ jobs:
             exit 1
           fi
 
-      # 3. 启动桌面 & Cloudflare Tunnel (回归原始逻辑)
-      - name: Start Desktop & Network Tunnel
+      # 3. 启动桌面环境
+      - name: Start Desktop Environment
         run: |
           service dbus start || true
           
-          # 3.1 启动桌面环境
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
@@ -83,34 +82,43 @@ jobs:
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
-          sleep 3
-          
-          # 3.2 启动 Tunnel (完全使用你原始的逻辑)
+          echo "✅ Desktop Started (Xvfb + Fluxbox + VNC)"
+
+      # 4. 启动 Network Tunnel (单独步骤 + 快速检测)
+      - name: Start Network Tunnel
+        run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           
-          # 启动并把日志输出到当前目录
+          # 启动 tunnel
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Waiting for Tunnel (Sleeping 15s to be safe)..."
-          sleep 15
+          echo "Waiting for Tunnel URL..."
           
-          # 提取 URL
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          FOUND=0
+          # 【修改】循环10次，每次1秒，快速响应
+          for i in {1..10}; do
+            if grep -q "trycloudflare.com" tunnel.log; then
+              FOUND=1
+              break
+            fi
+            echo "Waiting... ($i/10)"
+            sleep 1
+          done
           
-          # 增加一个空值检查，防止只输出后缀
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ Failed to grab Tunnel URL. Cloudflared Log:"
-            cat tunnel.log
-            # 这里不退出，方便你进 VNC 调试，但提示错误
-          else
+          if [ "$FOUND" -eq 1 ]; then
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
             echo "=========================================================="
             echo "🚀 VNC 远程链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
             echo "=========================================================="
+          else
+            echo "❌ Tunnel failed to start within 10 seconds. Log content:"
+            cat tunnel.log
+            # 这里不 exit，允许你去排查，或者稍后在日志里看到
           fi
 
-      # 4. 运行 Playwright 脚本 (双向日志)
-      - name: Run Playwright Script (Sync Logs)
+      # 5. 运行 Playwright 脚本 (双向日志)
+      - name: Run Playwright Script
         run: |
           # 预创建日志文件
           touch /home/appuser/bot.log
@@ -125,6 +133,7 @@ jobs:
           export HOME=/home/appuser
           export PATH=$PATH:/home/appuser/.local/bin
           
+          # 启动终端运行 python
           xterm -geometry 100x30 -bg black -fg green -title "Playwright Automation" -hold -e "python3 -u /home/appuser/get_ipa.py 2>&1 | tee /home/appuser/bot.log" &
           EOF
           
@@ -133,7 +142,7 @@ jobs:
           
           echo "🤖 Script started in background xterm."
 
-      # 5. 监控下载 + 实时显示脚本日志
+      # 6. 监控下载 + 实时显示脚本日志
       - name: Monitor Download & Logs
         run: |
           TARGET_DIR="/home/appuser/Downloads"
@@ -160,10 +169,10 @@ jobs:
             
             if [ -n "$FILE" ]; then
                if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
-                  # 下载中...
-                  :
+                  : # 下载中
                else
                   SIZE_MB=$(du -m "$FILE" | cut -f1)
+                  # 大于 5MB 视为有效
                   if [ "$SIZE_MB" -gt 5 ]; then
                      echo "✅ Download finished: $FILE ($SIZE_MB MB)"
                      break
@@ -175,7 +184,7 @@ jobs:
           
           kill $TAIL_PID || true
 
-      # 6. 上传产物
+      # 7. 上传产物
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
