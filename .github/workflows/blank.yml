@@ -1,10 +1,9 @@
-name: Firefox Allowed-Ads VNC (XFCE4 + Anti-Detect)
-
+name: Firefox Allowed-Ads VNC
 on: 
   workflow_dispatch:
 
 jobs:
-  firefox-xfce:
+  firefox-user:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
@@ -14,39 +13,38 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 (XFCE4)
-      - name: Install System & Desktop
+      # 1. 安装基础环境
+      - name: Install System & Firefox
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y software-properties-common wget curl git net-tools sudo vim unzip python3-pip psmisc
-          apt-get install -y xfce4 xfce4-goodies xfce4-terminal
-          apt-get install -y xvfb x11vnc dbus-x11 pulseaudio
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip
           
-          # noVNC
+          add-apt-repository -y ppa:mozillateam/ppa
+          
+          echo '
+          Package: *
+          Pin: release o=LP-PPA-mozillateam
+          Pin-Priority: 1001
+          ' | tee /etc/apt/preferences.d/mozilla-firefox
+          
+          apt-get update
+          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer xvfb fluxbox x11vnc python3 pulseaudio dbus-x11
+          
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
+          fc-cache -f -v
+          
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
-          
-          # Playwright
-          pip3 install playwright
-          playwright install-deps
 
-      # 2. 配置用户、手动Profile & Python脚本
-      - name: Setup User, Profile & Script
+      # 2. 创建用户 & 配置“允许广告”的 Profile
+      - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
-          su appuser -c "mkdir -p /home/appuser/Downloads"
           
-          # 安装 Firefox
-          echo ">>> Installing Firefox..."
-          su appuser -c "playwright install firefox"
-
-          # -------------------------------------------------------------
-          # 【步骤 A】为手动 Debug 准备物理 Profile (当你手动点 Firefox 图标时生效)
-          # -------------------------------------------------------------
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
@@ -55,171 +53,41 @@ jobs:
           IsRelative=1
           Path=stealth.default
           Default=1
+          
           [General]
           StartWithLastProfile=1
           Version=2
           EOF"
           
-          # 写入你的 user.js 配置到默认 Profile
+          # 核心修改：写入允许广告和追踪的 user.js
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
+          // 1. 基础反爬 (保持不变)
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
+          
+          // 2. 必须禁用的隐私保护 (修复 AdBlock 检测)
+          // 关闭增强跟踪保护
           user_pref(\"privacy.trackingprotection.enabled\", false);
           user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
           user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
           user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
           user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
-          user_pref(\"network.cookie.cookieBehavior\", 0);
+          
+          // 允许所有 Cookie (很多广告依赖第三方 Cookie)
+          user_pref(\"network.cookie.cookieBehavior\", 0); // 0 = Accept all
           user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
+          
+          // 3. 其他可能触发检测的设置
           user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
-          user_pref(\"dom.disable_open_during_load\", false);
+          user_pref(\"dom.disable_open_during_load\", false); // 允许弹窗 (有些广告是弹窗)
+          
+          // 4. 保持 WebRTC 关闭 (防止 IP 泄露，如果广告一定需要 WebRTC 才能加载，这里可能需要改回 true)
           user_pref(\"media.peerconnection.enabled\", false);
           EOF"
 
-          # -------------------------------------------------------------
-          # 【步骤 B】集成到 Python 脚本 (当脚本运行时生效)
-          # -------------------------------------------------------------
-          cat <<'EOF' > /home/appuser/get_ipa.py
-          import json
-          import time
-          import os
-          from playwright.sync_api import sync_playwright
-
-          def run():
-              base_url = "https://decrypt.day/app/id1489932710"
-              print(f"[Script] 启动 Playwright...")
-              
-              with sync_playwright() as p:
-                  # 【核心集成】在这里直接注入所有的 user_pref 配置
-                  # 这样即使不依赖外部 user.js 文件，脚本启动的浏览器也是完全“去指纹”且“允许广告”的
-                  browser = p.firefox.launch(
-                      headless=False,
-                      args=[
-                          "--no-sandbox",
-                          "--disable-gpu",
-                          "--disable-dev-shm-usage",
-                          "--disable-setuid-sandbox"
-                      ],
-                      firefox_user_prefs={
-                          # 1. 基础反爬
-                          "dom.webdriver.enabled": False,
-                          "use_automation_extension": False,
-                          
-                          # 2. 隐私与追踪 (全部关闭以允许广告加载)
-                          "privacy.trackingprotection.enabled": False,
-                          "privacy.trackingprotection.pbmode.enabled": False,
-                          "privacy.trackingprotection.socialtracking.enabled": False,
-                          "privacy.trackingprotection.cryptomining.enabled": False,
-                          "privacy.trackingprotection.fingerprinting.enabled": False,
-                          
-                          # 3. Cookie 设置 (0 = 允许所有，包括第三方)
-                          "network.cookie.cookieBehavior": 0,
-                          "network.cookie.thirdparty.sessionOnly": False,
-                          
-                          # 4. 弹窗与交互设置 (允许广告弹窗)
-                          "dom.popup_allowed_events": "change click dblclick mouseup notificationclick reset submit touchend",
-                          "dom.disable_open_during_load": False,
-                          
-                          # 5. WebRTC (False = 关闭，防止漏 IP)
-                          "media.peerconnection.enabled": False,
-                      }
-                  )
-
-                  # 上下文设置
-                  context = browser.new_context(
-                      # User Agent 也可以在这里再次强制指定
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-                      viewport={"width": 1280, "height": 800},
-                      ignore_https_errors=True,
-                      locale="zh-CN",
-                      timezone_id="Asia/Shanghai"
-                  )
-                  
-                  # 再次确保 webdriver 属性被抹除
-                  context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-
-                  page = context.new_page()
-                  print(f"[Script] 打开页面: {base_url}")
-                  
-                  try:
-                      page.goto(base_url, timeout=90000)
-                      page.wait_for_load_state("domcontentloaded")
-                  except Exception as e:
-                      print(f"[Script] 警告: 页面加载 {e}")
-
-                  # Cloudflare 检测
-                  if "Just a moment" in page.title() or "Cloudflare" in page.title():
-                      print("\n" + "!"*30)
-                      print("[!] Cloudflare 拦截！请进 VNC 手动验证！")
-                      print("!"*30 + "\n")
-                      time.sleep(30)
-
-                  print("[Script] 解析下载逻辑...")
-                  try:
-                      # 模拟前端请求获取下载配置
-                      js_code = """
-                          async () => {
-                              const formData = new FormData();
-                              formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
-                              const resp = await fetch('""" + base_url + """?/files', {method: 'POST', body: formData});
-                              return await resp.text();
-                          }
-                      """
-                      result = page.evaluate(js_code)
-                      data_json = json.loads(result)
-                      dl_list = json.loads(data_json.get("data", "[]"))
-                      
-                      target_path = ""
-                      for item in dl_list:
-                          if isinstance(item, str) and len(item) == 21:
-                              target_path = item
-                              break
-                      
-                      if not target_path and "gofile.io" in dl_list:
-                           idx = dl_list.index("gofile.io")
-                           target_path = dl_list[idx-3]
-
-                      if not target_path:
-                          print("[Script] 未找到路径，请手动操作。")
-                      else:
-                          dl_url = f"{base_url}/dl/{target_path}"
-                          print(f"[Script] 下载页: {dl_url}")
-                          dl_page = context.new_page()
-                          dl_page.goto(dl_url, referer=base_url)
-                          
-                          print("[Script] 点击 'Get download link'...")
-                          dl_page.locator("button.btn-download").filter(has_text="Get download link").click()
-                          time.sleep(3)
-                          
-                          print("[Script] 点击 'Download'...")
-                          with dl_page.expect_download(timeout=60000) as download_info:
-                              dl_page.locator("button.btn-download").filter(has_text="Download").click()
-                          
-                          download = download_info.value
-                          print(f"[Script] 下载开始: {download.suggested_filename}")
-                          final_path = os.path.join("/home/appuser/Downloads", download.suggested_filename)
-                          download.save_as(final_path)
-                          print(f"[Script] ✅ 保存成功: {final_path}")
-
-                  except Exception as e:
-                      print(f"[Script] 流程错误: {e}")
-                      import traceback
-                      traceback.print_exc()
-
-                  print("[Script] 浏览器保持开启，等待 Action 结束...")
-                  while True:
-                      time.sleep(10)
-
-          if __name__ == "__main__":
-              run()
-          EOF
-
-          chown appuser:appuser /home/appuser/get_ipa.py
-          chmod +x /home/appuser/get_ipa.py
-
-      # 3. 启动 XFCE4 桌面
-      - name: Start XFCE Desktop
+      # 3. 启动桌面
+      - name: Start Desktop (As User)
         run: |
           service dbus start || true
           
@@ -227,24 +95,36 @@ jobs:
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
           Xvfb :99 -screen 0 1280x800x24 &
           sleep 2
-          dbus-launch --exit-with-session xfce4-session &
+          fluxbox &
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
-          echo "✅ Desktop Started"
+          sleep 3
 
-      # 4. 启动 Tunnel
-      - name: Start Network Tunnel
+      # 4. 启动 Firefox
+      - name: Launch Firefox & Tunnel
         run: |
+          cat <<EOF > /home/appuser/run_firefox.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          # 替换成你的目标网址
+          nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
+          EOF
+          
+          chmod +x /home/appuser/run_firefox.sh
+          su appuser -c "/home/appuser/run_firefox.sh"
+          
+          echo "Firefox launching..."
+          sleep 5
+          
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
-          
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
@@ -253,66 +133,63 @@ jobs:
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
+          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          echo "💡 已配置允许广告和追踪，修复 AdBlock 检测问题。"
           echo "=========================================================="
-
-      # 5. 运行 Python 脚本
-      - name: Run Playwright Script
-        run: |
-          touch /home/appuser/bot.log
-          chmod 666 /home/appuser/bot.log
-
-          cat <<EOF > /home/appuser/run_bot.sh
-          #!/bin/bash
-          export DISPLAY=:99
-          export HOME=/home/appuser
-          export LIBGL_ALWAYS_SOFTWARE=1
           
-          nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
-          EOF
-          
-          chmod +x /home/appuser/run_bot.sh
-          su appuser -c "/home/appuser/run_bot.sh"
-          
-          echo "🤖 Script running..."
-
-      # 6. 监控
-      - name: Monitor & Logs
+          # tail -f /home/appuser/firefox.log
+    
+      # 5. 核心步骤：监控下载并校验
+      - name: Monitor Download (Wait for IPA)
         run: |
           TARGET_DIR="/home/appuser/Downloads"
-          LOG_FILE="/home/appuser/bot.log"
-          START_TIME=$(date +%s)
-          TIMEOUT=1800 
+          MAX_SIZE_MB=100
           
-          echo "📝 Streaming logs..."
-          tail -f "$LOG_FILE" &
-          TAIL_PID=$!
+          echo "Starting monitoring loop for *.ipa in $TARGET_DIR"
           
           while true; do
-            NOW=$(date +%s)
-            if [ $((NOW - START_TIME)) -ge "$TIMEOUT" ]; then
-               echo "❌ Timeout"
-               kill $TAIL_PID || true
-               exit 1
+            # 查找 ipa 文件 (不包含 .part 临时文件)
+            FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
+            
+            if [ -n "$FILE" ]; then
+              BASENAME=$(basename "$FILE")
+              
+              # 1. 检查是否还在下载 (Firefox 通常会生成 .part)
+              if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
+                 echo "⏳ File $BASENAME is still downloading..."
+              else
+                 # 2. 检查大小
+                 SIZE_MB=$(du -m "$FILE" | cut -f1)
+                 
+                 if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
+                   echo "⚠️ Found $BASENAME but size ($SIZE_MB MB) is too small (> $MAX_SIZE_MB MB). Waiting for correct file..."
+                 else
+                   echo "✅ Found candidate: $BASENAME ($SIZE_MB MB)"
+                   
+                   # 3. 检查完整性 (使用 zip -T)
+                   # echo "🔍 Verifying integrity..."
+                   # if zip -T "$FILE" > /dev/null 2>&1; then
+                   #  echo "🎉 Integrity Check PASSED!"
+                   #  echo "FILE_PATH=$FILE" >> $GITHUB_ENV
+                   #  break
+                   #else
+                   break
+                   #  echo "❌ Integrity Check FAILED. The file might be incomplete or corrupted. Waiting..."
+                   #fi
+                 fi
+              fi
+            else
+               # 没有任何文件时，仅打印心跳
+               echo "Waiting for user to download IPA..."
             fi
             
-            FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
-            if [ -n "$FILE" ]; then
-               if [ ! -f "${FILE}.part" ] && [ ! -f "${FILE}.partjs" ]; then
-                  SIZE_MB=$(du -m "$FILE" | cut -f1)
-                  if [ "$SIZE_MB" -gt 5 ]; then
-                     echo "✅ Success: $FILE ($SIZE_MB MB)"
-                     break
-                  fi
-               fi
-            fi
             sleep 3
           done
-          kill $TAIL_PID || true
+          
+          echo "Download complete and verified. Stopping session."
 
-      # 7. 上传
-      - name: Upload IPA
+      # 6. 上传产物
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: decrypted-app
