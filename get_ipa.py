@@ -142,6 +142,8 @@ def run():
         btn.click()
         
         time.sleep(5)
+
+        print("二次点击...")
         btn = dl_page.locator("button.btn-download").filter(has_text="Download")
         btn.click()
 
@@ -150,5 +152,4 @@ def run():
         browser.close()
 
 if __name__ == "__main__":
-
     run()
