@@ -49,7 +49,7 @@ jobs:
           
           # 【核心】以 appuser 身份安装 firefox
           echo ">>> Installing Firefox for AppUser..."
-          su appuser -c "playwright install firefox"
+          su appuser -c "playwright install"
           
           # 移动脚本并赋予权限
           if [ -f "get_ipa.py" ]; then
