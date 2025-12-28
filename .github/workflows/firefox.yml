@@ -20,8 +20,9 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装系统工具 + Python + Pip + Xterm
-          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip xterm
+          # 安装基础工具 + Python + Pip
+          # 去掉了 xterm，因为不再需要终端模拟器
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip
           
           # 安装 noVNC 和 VNC Server
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
@@ -38,7 +39,7 @@ jobs:
           # 安装所有浏览器所需的系统依赖 (Root 运行)
           playwright install-deps
 
-      # 2. 配置用户 & 安装浏览器内核 (关键修复步骤)
+      # 2. 配置用户 & 安装浏览器内核
       - name: Setup User & Install Playwright Browsers
         run: |
           useradd -m -s /bin/bash appuser
@@ -46,11 +47,10 @@ jobs:
           # 建立下载文件夹
           su appuser -c "mkdir -p /home/appuser/Downloads"
           
-          # 【修复核心】以 appuser 身份运行 install，并安装所有浏览器
-          # 这样无论脚本是用 chromium 还是 firefox，都能找到二进制文件
-          # 且文件会被正确放置在 /home/appuser/.cache/ms-playwright/ 下
-          echo ">>> Installing All Playwright Browsers for AppUser..."
-          su appuser -c "playwright install"
+          # 【核心修复】以 appuser 身份安装 Firefox
+          # 确保脚本运行时能在 /home/appuser/.cache/ms-playwright 下找到浏览器
+          echo ">>> Installing Firefox for AppUser..."
+          su appuser -c "playwright install firefox"
           
           # 移动脚本并赋予权限
           if [ -f "get_ipa.py" ]; then
@@ -62,7 +62,7 @@ jobs:
             exit 1
           fi
 
-      # 3. 启动桌面环境
+      # 3. 启动桌面环境 (后台运行)
       - name: Start Desktop Environment
         run: |
           service dbus start || true
@@ -72,58 +72,37 @@ jobs:
           export DISPLAY=:99
           export HOME=/home/appuser
           
+          # 启动虚拟显卡
           Xvfb :99 -screen 0 1280x800x24 &
           sleep 2
+          
+          # 启动窗口管理器
           fluxbox &
-          # VNC 密码: secret
+          
+          # 启动 VNC Server (密码: secret)
           x11vnc -display :99 -forever -passwd secret -bg -noxdamage
+          
+          # 启动 noVNC 代理
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
+          # 后台运行桌面环境
           su appuser -c "/home/appuser/run_desktop.sh"
           echo "✅ Desktop Started (Xvfb + Fluxbox + VNC)"
 
-      # 4. 启动 Network Tunnel (单独步骤 + 快速检测)
+      # 4. 启动 Network Tunnel (使用你指定的逻辑)
       - name: Start Network Tunnel
         run: |
-          # curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          # dpkg -i cloudflared.deb
-          
-          # # 启动 tunnel
-          # cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
-          
-          # echo "Waiting for Tunnel URL..."
-          
-          
-          # FOUND=0
-          # # 【修改】循环10次，每次1秒，快速响应
-          # for i in {1..10}; do
-          #   if grep -q "trycloudflare.com" tunnel.log; then
-          #     FOUND=1
-          #     break
-          #   fi
-          #   echo "Waiting... ($i/10)"
-          #   sleep 1
-          # done
-          
-          # if [ "$FOUND" -eq 1 ]; then
-          #   TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          #   echo "=========================================================="
-          #   echo "🚀 VNC 远程链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-          #   echo "=========================================================="
-          # else
-          #   echo "❌ Tunnel failed to start within 10 seconds. Log content:"
-          #   cat tunnel.log
-          #   # 这里不 exit，允许你去排查，或者稍后在日志里看到
-          # fi
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
+          
+          # 启动 tunnel，日志输出到文件
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          #sleep 10
-          # 【修改】循环10次，每次1秒，快速响应
+          
+          # 循环检测10次，每次1秒
           for i in {1..10}; do
             if grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log; then
               break
@@ -135,76 +114,37 @@ jobs:
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
+          echo "🦊 Firefox (Playwright Mode) 已准备就绪"
           echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
           echo "=========================================================="
 
-      # 5. 运行 Playwright 脚本 (双向日志)
+      # 5. 直接运行 Playwright 脚本
       - name: Run Playwright Script
         run: |
-          # 预创建日志文件
-          touch /home/appuser/bot.log
-          chmod 666 /home/appuser/bot.log
+          echo "🚀 Starting Playwright script directly..."
+          
+          # 必须指定 DISPLAY=:99，否则 headless=False 会报错
+          # python3 -u 保证日志实时输出到 GitHub Action 控制台
+          su appuser -c "export DISPLAY=:99 && python3 -u /home/appuser/get_ipa.py"
 
-          # 创建启动脚本
-          # 使用 python3 -u 禁用缓存
-          # 使用 tee 同时输出到 xterm 屏幕和 bot.log
-          cat <<EOF > /home/appuser/run_bot.sh
-          #!/bin/bash
-          export DISPLAY=:99
-          export HOME=/home/appuser
-          export PATH=$PATH:/home/appuser/.local/bin
-          
-          # 启动终端运行 python
-          xterm -geometry 100x30 -bg black -fg green -title "Playwright Automation" -hold -e "python3 -u /home/appuser/get_ipa.py 2>&1 | tee /home/appuser/bot.log" &
-          EOF
-          
-          chmod +x /home/appuser/run_bot.sh
-          su appuser -c "/home/appuser/run_bot.sh"
-          
-          echo "🤖 Script started in background xterm."
-
-      # 6. 监控下载 + 实时显示脚本日志
-      - name: Monitor Download & Logs
+      # 6. 监控/检查下载结果
+      # 如果你的脚本是同步等待下载完成才退出的，这一步主要起到确认作用
+      - name: Verify Download
         run: |
           TARGET_DIR="/home/appuser/Downloads"
-          LOG_FILE="/home/appuser/bot.log"
-          START_TIME=$(date +%s)
-          TIMEOUT=1800 # 30分钟
+          echo "📂 Checking directory: $TARGET_DIR"
+          ls -lh $TARGET_DIR
           
-          echo "📝 Syncing logs from VNC to here..."
+          FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
           
-          # 后台启动 tail，实时搬运日志
-          tail -f "$LOG_FILE" &
-          TAIL_PID=$!
-          
-          while true; do
-            NOW=$(date +%s)
-            ELAPSED=$((NOW - START_TIME))
-            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-               echo "❌ Timeout!"
-               kill $TAIL_PID || true
-               exit 1
-            fi
-            
-            FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
-            
-            if [ -n "$FILE" ]; then
-               if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
-                  : # 下载中
-               else
-                  SIZE_MB=$(du -m "$FILE" | cut -f1)
-                  # 大于 5MB 视为有效
-                  if [ "$SIZE_MB" -gt 5 ]; then
-                     echo "✅ Download finished: $FILE ($SIZE_MB MB)"
-                     break
-                  fi
-               fi
-            fi
-            sleep 3
-          done
-          
-          kill $TAIL_PID || true
+          if [ -n "$FILE" ]; then
+             SIZE_MB=$(du -m "$FILE" | cut -f1)
+             echo "✅ Success! Found IPA: $FILE ($SIZE_MB MB)"
+          else
+             echo "⚠️ No IPA file found immediately after script finished."
+             # 如果你的脚本点击下载后立马退出了，可能还没下载完。
+             # 如果需要，可以在这里加一个简单的等待循环，或者在 python 脚本里加等待逻辑。
+          fi
 
       # 7. 上传产物
       - name: Upload IPA
