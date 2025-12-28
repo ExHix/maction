@@ -123,11 +123,9 @@ jobs:
           
           echo "Waiting for Tunnel..."
           #sleep 10
-          FOUND=0
           # 【修改】循环10次，每次1秒，快速响应
           for i in {1..10}; do
-            if grep -q "trycloudflare.com" tunnel.log; then
-              FOUND=1
+            if grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log; then
               break
             fi
             echo "Waiting... ($i/10)"
