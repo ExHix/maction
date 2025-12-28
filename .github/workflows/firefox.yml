@@ -84,34 +84,20 @@ jobs:
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
           
-          # 3.2 启动 Cloudflare Tunnel
+          # 启动cf tunnel
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
-          
-          # 启动 tunnel 并重定向日志
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Waiting for Tunnel URL..."
+          echo "Waiting for Tunnel..."
+          sleep 10
           
-          # 【核心修复】循环检测 URL，防止 grep 空值
-          for i in {1..20}; do
-            sleep 2
-            if grep -q "trycloudflare.com" tunnel.log; then
-              echo "Tunnel found!"
-              break
-            fi
-            echo "Searching for URL... ($i/20)"
-          done
-          
-          # 提取 URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          
-          if [ -z "$TUNNEL_URL" ]; then
-            echo "❌ Failed to get Tunnel URL. Printing tunnel.log:"
-            cat tunnel.log
-            exit 1
-          fi
-          
+                              
           echo "=========================================================="
           echo "🚀 VNC 远程链接:"
           echo "$TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
