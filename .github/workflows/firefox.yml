@@ -122,7 +122,17 @@ jobs:
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          sleep 10
+          #sleep 10
+          FOUND=0
+          # 【修改】循环10次，每次1秒，快速响应
+          for i in {1..10}; do
+            if grep -q "trycloudflare.com" tunnel.log; then
+              FOUND=1
+              break
+            fi
+            echo "Waiting... ($i/10)"
+            sleep 1
+          done
           
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
