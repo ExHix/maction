@@ -87,35 +87,49 @@ jobs:
       # 4. 启动 Network Tunnel (单独步骤 + 快速检测)
       - name: Start Network Tunnel
         run: |
+          # curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          # dpkg -i cloudflared.deb
+          
+          # # 启动 tunnel
+          # cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
+          
+          # echo "Waiting for Tunnel URL..."
+          
+          
+          # FOUND=0
+          # # 【修改】循环10次，每次1秒，快速响应
+          # for i in {1..10}; do
+          #   if grep -q "trycloudflare.com" tunnel.log; then
+          #     FOUND=1
+          #     break
+          #   fi
+          #   echo "Waiting... ($i/10)"
+          #   sleep 1
+          # done
+          
+          # if [ "$FOUND" -eq 1 ]; then
+          #   TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          #   echo "=========================================================="
+          #   echo "🚀 VNC 远程链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          #   echo "=========================================================="
+          # else
+          #   echo "❌ Tunnel failed to start within 10 seconds. Log content:"
+          #   cat tunnel.log
+          #   # 这里不 exit，允许你去排查，或者稍后在日志里看到
+          # fi
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
-          
-          # 启动 tunnel
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          echo "Waiting for Tunnel URL..."
+          echo "Waiting for Tunnel..."
+          sleep 10
           
-          FOUND=0
-          # 【修改】循环10次，每次1秒，快速响应
-          for i in {1..10}; do
-            if grep -q "trycloudflare.com" tunnel.log; then
-              FOUND=1
-              break
-            fi
-            echo "Waiting... ($i/10)"
-            sleep 1
-          done
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
-          if [ "$FOUND" -eq 1 ]; then
-            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-            echo "=========================================================="
-            echo "🚀 VNC 远程链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
-            echo "=========================================================="
-          else
-            echo "❌ Tunnel failed to start within 10 seconds. Log content:"
-            cat tunnel.log
-            # 这里不 exit，允许你去排查，或者稍后在日志里看到
-          fi
+          echo "=========================================================="
+          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
+          echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "=========================================================="
 
       # 5. 运行 Playwright 脚本 (双向日志)
       - name: Run Playwright Script
