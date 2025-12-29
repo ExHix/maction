@@ -92,24 +92,16 @@ jobs:
       - name: Start XFCE Desktop
         run: |
           service dbus start || true
-          
+  
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
-          # 启动 Xvfb (分辨率 1440x900)
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 2
-          
-          # 启动 XFCE4
           export XFCE_PANEL_MIGRATE_DEFAULT=true
           startxfce4 &
-          
-          # 启动 VNC
           x11vnc -display :99 -forever -bg -noxdamage
-          
-          # 启动 noVNC
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
@@ -117,11 +109,10 @@ jobs:
           su appuser -c "/home/appuser/run_desktop.sh"
           
           sleep 5
-          # 防止黑屏
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
       # 4. 启动 Chrome (通过 Playwright 自动化) & Cloudflare Tunnel
-      - name: Launch Chrome & Cloudflare Tunnel
+      - name: Cloudflare Tunnel
         run: |
           # Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
@@ -142,9 +133,10 @@ jobs:
           echo "🖥️  XFCE Desktop Ready!"
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
-
-
-
+      
+      - name: Launch Chrome
+        run: |
+          cat <<'EOF' > /home/appuser/get_ipa.py
           cat <<EOF > /home/appuser/automate.py
           from playwright.sync_api import sync_playwright
           import time
@@ -193,11 +185,27 @@ jobs:
                   time.sleep(10)
           EOF
 
-          # 在后台运行自动化脚本
+          chown appuser:appuser /home/appuser/get_ipa.py
+          chmod +x /home/appuser/get_ipa.py
+
+          touch /home/appuser/bot.log
+          chmod 666 /home/appuser/bot.log
+
+          cat <<EOF > /home/appuser/run_bot.sh
+          #!/bin/bash
           export DISPLAY=:99
-          su appuser -c "nohup python3 /home/appuser/automate.py > /home/appuser/chrome.log 2>&1 &"
+          export HOME=/home/appuser
+          export LIBGL_ALWAYS_SOFTWARE=1
           
-          tail -f /home/appuser/chrome.log
+          nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
+          EOF
+          
+          chmod +x /home/appuser/run_bot.sh
+          su appuser -c "/home/appuser/run_bot.sh"
+          
+          echo "🤖 Script running..."
+
+          tail -f /home/appuser/bot.log
 
       # 5. 监控下载 (逻辑不变)
       - name: Monitor Download (Wait for IPA)
