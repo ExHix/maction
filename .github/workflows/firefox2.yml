@@ -226,6 +226,8 @@ jobs:
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
 
+          tail -f /home/appuser/firefox_automation.log
+
       # 5. 监控下载 (保持不变)
       - name: Monitor Download (Wait for IPA)
         timeout-minutes: 30
