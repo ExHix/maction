@@ -198,38 +198,34 @@ jobs:
           su appuser -c "/home/appuser/run_py_firefox.sh"
           
           echo "Firefox launching via Playwright..."
-          sleep 10
+          sleep 5
           
-          # --- Cloudflare Tunnel 部分 ---
+          # 使用 Cloudflare Tunnel 暴露 6080 端口
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
-          # 启动 tunnel，不转义
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          # 修正后的循环：去掉了变量前的反斜杠
           for i in $(seq 1 10); do
             TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-            
+
             if [ -n "$TUNNEL_URL" ]; then
                 echo "Found Tunnel URL: $TUNNEL_URL"
                 break
             fi
             
-            echo "Attempt $i: Tunnel not ready yet..."
             if [ "$i" -eq 10 ]; then
-                echo "Error: Failed to find Tunnel URL."
+                echo "Error: Failed to find Tunnel URL after 10 seconds."
                 exit 1
             fi
-            sleep 2
+
+            sleep 1
           done
           
           echo "=========================================================="
-          echo "🖥️  XFCE Desktop Ready (System Firefox + Playwright)!"
+          echo "🖥️  XFCE Desktop Ready!"
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
-
-          tail -f /home/appuser/firefox_automation.log
 
       # 5. 监控下载 (保持不变)
       - name: Monitor Download (Wait for IPA)
