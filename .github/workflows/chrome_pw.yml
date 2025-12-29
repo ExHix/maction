@@ -23,9 +23,6 @@ jobs:
           # 安装基础工具 (添加了 python3-pip)
           apt-get install -y wget curl git net-tools sudo vim unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
           
-          # 安装 DrissionPage
-          pip3 install playwright
-          
           # === 以下保持不变 ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           apt-get install -y ./google-chrome-stable_current_amd64.deb
@@ -136,8 +133,12 @@ jobs:
       
       - name: Launch Chrome
         run: |
+          # 安装 DrissionPage
+          pip3 install playwright tf-playwright-stealth
+
           cat <<'EOF' > /home/appuser/get_ipa.py
           from playwright.sync_api import sync_playwright
+          from playwright_stealth import stealth_sync
           import time
           import os
 
@@ -168,21 +169,100 @@ jobs:
               )
               
               # 获取默认页面或新建页面
-              print("New pages...")
-              page = browser.new_page()
+              # print("New pages...")
+              # page = browser.new_page()
               
-              # === 额外反爬措施：移除 navigator.webdriver 属性 ===
-              # DrissionPage 默认会自动处理这个，Playwright 需要手动注入
-              page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+              # # === 额外反爬措施：移除 navigator.webdriver 属性 ===
+              # # DrissionPage 默认会自动处理这个，Playwright 需要手动注入
+              # page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
               
-              print("🔗 正在访问目标页面...")
-              try:
-                  page.goto('https://decrypt.day/app/id1489932710', timeout=60000)
-                  print("✅ 页面加载完成")
-              except Exception as e:
-                  print(f"⚠️ 页面加载可能超时: {e}")
+              # print("🔗 正在访问目标页面...")
+              # try:
+              #     page.goto('https://decrypt.day/app/id1489932710', timeout=60000)
+              #     print("✅ 页面加载完成")
+              # except Exception as e:
+              #     print(f"⚠️ 页面加载可能超时: {e}")
 
-              # 保持运行，等待 VNC 查看或后续操作
+              # # 保持运行，等待 VNC 查看或后续操作
+              # while True:
+              #     time.sleep(10)
+
+              context = browser.new_context()
+              
+              # 再次确保 webdriver 属性被抹除
+              context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+
+              page = context.new_page()
+              stealth_sync(page)
+              print(f"[Script] 打开页面: {base_url}")
+              
+              try:
+                  page.goto(base_url, timeout=90000)
+                  page.wait_for_load_state("domcontentloaded")
+              except Exception as e:
+                  print(f"[Script] 警告: 页面加载 {e}")
+
+              # Cloudflare 检测
+              if "Just a moment" in page.title() or "Cloudflare" in page.title():
+                  print("\n" + "!"*30)
+                  print("[!] Cloudflare 拦截！请进 VNC 手动验证！")
+                  print("!"*30 + "\n")
+                  time.sleep(30)
+
+              print("[Script] 解析下载逻辑...")
+              try:
+                  # 模拟前端请求获取下载配置
+                  js_code = """
+                      async () => {
+                          const formData = new FormData();
+                          formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
+                          const resp = await fetch('""" + base_url + """?/files', {method: 'POST', body: formData});
+                          return await resp.text();
+                      }
+                  """
+                  result = page.evaluate(js_code)
+                  data_json = json.loads(result)
+                  dl_list = json.loads(data_json.get("data", "[]"))
+                  
+                  target_path = ""
+                  for item in dl_list:
+                      if isinstance(item, str) and len(item) == 21:
+                          target_path = item
+                          break
+                  
+                  if not target_path and "gofile.io" in dl_list:
+                        idx = dl_list.index("gofile.io")
+                        target_path = dl_list[idx-3]
+
+                  if not target_path:
+                      print("[Script] 未找到路径，请手动操作。")
+                  else:
+                      dl_url = f"{base_url}/dl/{target_path}"
+                      print(f"[Script] 下载页: {dl_url}")
+                      dl_page = context.new_page()
+                      stealth_sync(dl_page)
+                      dl_page.goto(dl_url, referer=base_url)
+                      
+                      print("[Script] 点击 'Get download link'...")
+                      dl_page.locator("button.btn-download").filter(has_text="Get download link").click()
+                      time.sleep(3)
+                      
+                      print("[Script] 点击 'Download'...")
+                      with dl_page.expect_download(timeout=60000) as download_info:
+                          dl_page.locator("button.btn-download").filter(has_text="Download").click()
+                      
+                      download = download_info.value
+                      print(f"[Script] 下载开始: {download.suggested_filename}")
+                      final_path = os.path.join("/home/appuser/Downloads", download.suggested_filename)
+                      download.save_as(final_path)
+                      print(f"[Script] ✅ 保存成功: {final_path}")
+
+              except Exception as e:
+                  print(f"[Script] 流程错误: {e}")
+                  import traceback
+                  traceback.print_exc()
+
+              print("[Script] 浏览器保持开启，等待 Action 结束...")
               while True:
                   time.sleep(10)
           EOF
