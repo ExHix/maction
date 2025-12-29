@@ -128,7 +128,7 @@ jobs:
       # 3. 编写 Python 自动化脚本 (指定 executable_path)
       - name: Create Python Automation Script
         run: |
-          pip3 install playwright playwright-stealth
+          pip3 install playwright tf-playwright-stealth
 
           cat <<EOF > /home/appuser/bot.py
           import time
