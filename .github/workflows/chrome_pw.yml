@@ -316,8 +316,18 @@ jobs:
 
               # 3. 指定你想要的下载路径
               # 比如你想下载到 /home/appuser/Downloads 并保留原始文件名
-              download_path = os.path.join("/home/appuser/Downloads", f"{download.suggested_filename}_result.ipa")
+              import re
+              regex = r'\d+\.\d+\.\d+'
 
+              match = re.search(regex, download.suggested_filename)
+              if match:
+                  version = match.group()
+                  print(f"提取结果: {version}")
+              else:
+                  version = f"unknown_{download.suggested_filename}"
+
+              download_path = os.path.join("/home/appuser/Downloads", f"{version}.ipa")
+    
               # 4. 执行保存操作
               download.save_as(download_path)
 
@@ -348,14 +358,13 @@ jobs:
           python3 -u /home/appuser/get_ipa.py
           EOF
           
-    
+          echo "🤖 Script running..."
+
+
           chmod +x /home/appuser/run_bot.sh
           su appuser -c "/home/appuser/run_bot.sh"
-          PW_PID=$! 
           
-          echo "🤖 Script running..."
-          tail -f /home/appuser/bot.log --pid=$PW_PID
-
+          
       # 5. 监控下载 (逻辑不变)
       - name: Monitor Download (Wait for IPA)
         timeout-minutes: 30
