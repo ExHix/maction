@@ -7,6 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+
       options: --privileged --shm-size=2gb
     
     steps:
@@ -53,15 +54,16 @@ jobs:
       - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
+          # 给予 sudo 权限方便调试 (可选)
           echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           
+          # 创建 Downloads 目录，方便在桌面文件管理器中看到
           su appuser -c "mkdir -p /home/appuser/Downloads"
           su appuser -c "mkdir -p /home/appuser/Desktop"
           
-          # 创建配置目录，Playwright 将作为 persistent_context 加载它
+          # 创建 Firefox 配置目录
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
-          # profiles.ini 即使 Playwright 不一定读它，保留它以防万一需要手动调试
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
           [Profile0]
           Name=default
@@ -74,31 +76,22 @@ jobs:
           Version=2
           EOF"
           
-          # 写入 user.js (Playwright 加载此目录时会自动生效这些配置)
+          # 写入 user.js (允许广告配置)
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
-          // 1. 基础反爬 (保持不变)
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
-          
-          // 2. 必须禁用的隐私保护 (修复 AdBlock 检测)
-          // 关闭增强跟踪保护
           user_pref(\"privacy.trackingprotection.enabled\", false);
           user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
-          user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
-          user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
-          user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
-          
-          // 允许所有 Cookie (很多广告依赖第三方 Cookie)
-          user_pref(\"network.cookie.cookieBehavior\", 0); // 0 = Accept all
+          user_pref(\"network.cookie.cookieBehavior\", 0); 
           user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
-          
-          // 3. 其他可能触发检测的设置
           user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
-          user_pref(\"dom.disable_open_during_load\", false); // 允许弹窗 (有些广告是弹窗)
-          
-          // 4. 保持 WebRTC 关闭 (防止 IP 泄露，如果广告一定需要 WebRTC 才能加载，这里可能需要改回 true)
+          user_pref(\"dom.disable_open_during_load\", false);
           user_pref(\"media.peerconnection.enabled\", false);
+          // 设置默认下载目录为 Downloads
+          user_pref(\"browser.download.folderList\", 2);
+          user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
+          user_pref(\"browser.download.useDownloadDir\", true);
           EOF"
 
       # 3. 启动 XFCE 桌面
@@ -130,126 +123,52 @@ jobs:
       # 4. 启动 Playwright 控制的 Firefox
       - name: Launch Firefox via Playwright & Tunnel
         run: |
-          pip3 install playwright tf-playwright-stealth
-  
-          cat <<EOF > /home/appuser/launch.py
-          import time
-          from playwright.sync_api import sync_playwright
-          from playwright_stealth import stealth_sync  # 引入伪装库
-
-          USER_DATA_DIR = "/home/appuser/.mozilla/firefox/stealth.default"
-          EXECUTABLE_PATH = "/usr/bin/firefox"
-          TARGET_URL = "https://decrypt.day/app/id1489932710"
-          
-          # 与 user.js 中保持一致的 UA
-          USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
-
-          def run():
-              with sync_playwright() as p:
-                  print("🚀 Starting Firefox with Stealth Mode...")
-                  
-                  # 启动参数优化
-                  args = [
-                      "--no-remote", 
-                      "--new-instance",
-                      "--disable-blink-features=AutomationControlled" # 尝试禁用自动化特征
-                  ]
-
-                  browser = p.firefox.launch_persistent_context(
-                      user_data_dir=USER_DATA_DIR,
-                      executable_path=EXECUTABLE_PATH,
-                      headless=False,
-                      #viewport={"width": 1440, "height": 900},
-                      user_agent=USER_AGENT,  # 显式覆盖 UA
-                      args=args,
-                      ignore_default_args=["--enable-automation"], # 隐藏自动化提示条
-                      java_script_enabled=True
-                  )
-                  
-                  # 获取页面（persistent_context 通常会默认打开一个空白页，如果没有则新建）
-                  page = browser.pages[0] if browser.pages else browser.new_page()
-
-                  # === 核心伪装步骤 ===
-                  
-                  # 1. 应用 playwright-stealth 插件
-                  stealth_sync(page)
-
-                  # 2. 手动注入脚本，强行抹除 webdriver 属性
-                  # 这段 JS 会在网页加载任何代码之前运行
-                  page.add_init_script("""
-                      Object.defineProperty(navigator, 'webdriver', {
-                          get: () => undefined
-                      });
-                  """)
-
-                  print(f"🌍 Navigating to {TARGET_URL}")
-                  
-                  # 访问目标网站
-                  try:
-                      page.goto(TARGET_URL, timeout=60000, wait_until="domcontentloaded")
-                  except Exception as e:
-                      print(f"⚠️ Page load warning: {e}")
-
-                  # 截图确认是否突破
-                  page.screenshot(path="/home/appuser/Downloads/debug_screenshot.png")
-                  print("📸 Debug screenshot saved to Downloads/")
-
-                  # 保持运行，等待人工/后续逻辑
-                  while True:
-                      time.sleep(120)
-
-          if __name__ == "__main__":
-              run()
-          EOF
-
-          # 创建启动脚本
-          cat <<EOF > /home/appuser/run_playwright.sh
+          cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 在后台运行 Python 脚本，日志输出到文件
-          nohup python3 /home/appuser/launch.py > /home/appuser/playwright.log 2>&1 &
+          # 启动 Firefox
+          nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
           EOF
           
-          chmod +x /home/appuser/run_playwright.sh
-          su appuser -c "/home/appuser/run_playwright.sh"
+          chmod +x /home/appuser/run_firefox.sh
+          su appuser -c "/home/appuser/run_firefox.sh"
           
-          echo "Playwright launching..."
+          echo "Firefox launching..."
           sleep 5
           
-          # 启动 Tunnel (保持不变)
+          # 使用 Cloudflare Tunnel 暴露 6080 端口
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo $TUNNEL_URL
-          if [ $TUNNEL_URL ]; then
-            echo "Pass"
-          fi
-          sleep 3
-          
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo $TUNNEL_URL
-          if [ $TUNNEL_URL ]; then
-            echo "Pass"
-          fi
-          sleep 3
-          
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          if [ $TUNNEL_URL ]; then
-            echo "Pass"
-          fi
-          echo $TUNNEL_URL
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          
-          echo "=========================================================="
-          echo "🤖 Firefox is running via Playwright"
-          echo "🔗 VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
-          echo "=========================================================="
+          for i in {1..10}; do
+              # 尝试提取 URL
+              TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
 
-          tail -f /home/appuser/playwright.log
+              if [ -n "$TUNNEL_URL" ]; then
+                  echo "Found Tunnel URL: $TUNNEL_URL"
+                  echo "Pass"
+                  break
+              fi
+
+              echo "Attempt $i: Tunnel not ready yet, retrying..."
+              
+              # 如果是最后一次尝试依然没找到，则抛出错误
+              if [ $i -eq 10 ]; then
+                  echo "Error: Failed to find Tunnel URL after 10 seconds."
+                  exit 1
+              fi
+
+              sleep 1
+          done
+                    
+          echo "=========================================================="
+          echo "🖥️  XFCE Desktop Ready!"
+          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
+          echo "    (VNC 界面会有任务栏和文件管理器，操作更方便)"
+          echo "=========================================================="
 
       # 5. 监控下载 (保持不变)
       - name: Monitor Download (Wait for IPA)
