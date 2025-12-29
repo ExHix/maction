@@ -1,4 +1,4 @@
-name: Firefox XFCE Desktop VNC
+name: Firefox XFCE Desktop VNC (Playwright)
 on: 
   workflow_dispatch:
 
@@ -7,21 +7,20 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 增加 --shm-size 以防止 Firefox 和 XFCE 崩溃
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 + XFCE4 桌面
+      # 1. 安装基础环境 + XFCE4 桌面 + Python依賴
       - name: Install System & Desktop (XFCE4)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装基础工具
-          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip
+          # 增加 python3-pip 用于安装 playwright
+          apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip python3-pip
           
           # 添加 Firefox PPA
           add-apt-repository -y ppa:mozillateam/ppa
@@ -36,12 +35,8 @@ jobs:
           # 安装 Firefox 和 字体
           apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer
           
-          # === 核心修改：安装 XFCE4 桌面环境 (替换 Fluxbox) ===
-          # xfce4: 桌面核心
-          # xfce4-goodies: 包含图片查看器、截图工具等
-          # thunar: 文件管理器 (关键)
-          # dbus-x11: 必须组件
-          apt-get install -y xvfb x11vnc python3 pulseaudio dbus-x11 xfce4 xfce4-goodies xfce4-terminal
+          # 安装 XFCE4 和 VNC 组件
+          apt-get install -y xvfb x11vnc pulseaudio dbus-x11 xfce4 xfce4-goodies xfce4-terminal
           
           # 同意微软字体协议
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
@@ -53,20 +48,22 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 2. 创建用户 & 配置 Firefox 反爬策略
+          # === 新增：安装 Playwright ===
+          pip3 install playwright
+
+      # 2. 创建用户 & 配置 Firefox 反爬策略 (保持不变，因为 Playwright 将加载此配置)
       - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
-          # 给予 sudo 权限方便调试 (可选)
           echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           
-          # 创建 Downloads 目录，方便在桌面文件管理器中看到
           su appuser -c "mkdir -p /home/appuser/Downloads"
           su appuser -c "mkdir -p /home/appuser/Desktop"
           
-          # 创建 Firefox 配置目录
+          # 创建配置目录，Playwright 将作为 persistent_context 加载它
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
+          # profiles.ini 即使 Playwright 不一定读它，保留它以防万一需要手动调试
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
           [Profile0]
           Name=default
@@ -79,19 +76,14 @@ jobs:
           Version=2
           EOF"
           
-          # 写入 user.js (允许广告配置)
+          # 写入 user.js (Playwright 加载此目录时会自动生效这些配置)
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
           user_pref(\"privacy.trackingprotection.enabled\", false);
-          user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
           user_pref(\"network.cookie.cookieBehavior\", 0); 
-          user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
-          user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
           user_pref(\"dom.disable_open_during_load\", false);
-          user_pref(\"media.peerconnection.enabled\", false);
-          // 设置默认下载目录为 Downloads
           user_pref(\"browser.download.folderList\", 2);
           user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
           user_pref(\"browser.download.useDownloadDir\", true);
@@ -107,67 +99,96 @@ jobs:
           export DISPLAY=:99
           export HOME=/home/appuser
           
-          # 启动 Xvfb (分辨率调高到 1440x900)
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 2
           
-          # === 核心修改：启动 XFCE4 而不是 Fluxbox ===
-          # 禁用锁屏和电源管理，防止 VNC 黑屏
           export XFCE_PANEL_MIGRATE_DEFAULT=true
           startxfce4 &
           
-          # 启动 VNC 服务器
           x11vnc -display :99 -forever -bg -noxdamage
-          
-          # 启动 noVNC 代理
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
           
-          # 等待桌面加载
           sleep 5
-          
-          # 移除可能的锁屏/屏保设置 (防止长时间运行黑屏)
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 4. 启动 Firefox
-      - name: Launch Firefox & Cloudflare Tunnel
+      # 4. 启动 Playwright 控制的 Firefox
+      - name: Launch Firefox via Playwright & Tunnel
         run: |
-          cat <<EOF > /home/appuser/run_firefox.sh
+          # 编写 Python 自动化脚本
+          cat <<EOF > /home/appuser/launch.py
+          import time
+          from playwright.sync_api import sync_playwright
+
+          # 之前步骤创建的配置路径
+          USER_DATA_DIR = "/home/appuser/.mozilla/firefox/stealth.default"
+          # 系统安装的 Firefox 路径
+          EXECUTABLE_PATH = "/usr/bin/firefox"
+          TARGET_URL = "https://decrypt.day/app/id1489932710"
+
+          def run():
+              with sync_playwright() as p:
+                  print("🚀 Starting Firefox with Playwright...")
+                  # 使用 launch_persistent_context 加载现有配置
+                  browser = p.firefox.launch_persistent_context(
+                      user_data_dir=USER_DATA_DIR,
+                      executable_path=EXECUTABLE_PATH,
+                      headless=False, # 必须为 False 才能在 VNC 看到界面
+                      viewport={"width": 1440, "height": 900}, # 匹配 Xvfb 分辨率
+                      args=["--no-remote", "--new-instance"], # 原始参数
+                      ignore_default_args=["--enable-automation"] # 尝试隐藏自动化条
+                  )
+                  
+                  page = browser.pages[0] if browser.pages else browser.new_page()
+                  
+                  print(f"🌍 Navigating to {TARGET_URL}")
+                  page.goto(TARGET_URL)
+                  
+                  # 保持脚本运行，充当守护进程，直到下载任务完成
+                  # 在这里可以逐步添加自动化点击逻辑
+                  # 目前只是保持浏览器打开供人工操作
+                  while True:
+                      time.sleep(60)
+
+          if __name__ == "__main__":
+              run()
+          EOF
+
+          # 创建启动脚本
+          cat <<EOF > /home/appuser/run_playwright.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 启动 Firefox
-          nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
+          # 在后台运行 Python 脚本，日志输出到文件
+          nohup python3 /home/appuser/launch.py > /home/appuser/playwright.log 2>&1 &
           EOF
           
-          chmod +x /home/appuser/run_firefox.sh
-          su appuser -c "/home/appuser/run_firefox.sh"
+          chmod +x /home/appuser/run_playwright.sh
+          su appuser -c "/home/appuser/run_playwright.sh"
           
-          echo "Firefox launching..."
+          echo "Playwright launching..."
           sleep 5
           
-          # 使用 Cloudflare Tunnel 暴露 6080 端口
+          # 启动 Tunnel (保持不变)
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
           sleep 10
-          
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
-          echo "🖥️  XFCE Desktop Ready!"
-          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
-          echo "    (VNC 界面会有任务栏和文件管理器，操作更方便)"
+          echo "🤖 Firefox is running via Playwright"
+          echo "🔗 VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
 
-      # 5. 监控下载并校验 (保持原有逻辑)
+      # 5. 监控下载 (保持不变)
       - name: Monitor Download (Wait for IPA)
-        timeout-minutes: 30 # 设置超时防止卡死
+        timeout-minutes: 30
         run: |
           TARGET_DIR="/home/appuser/Downloads"
           MAX_SIZE_MB=100
@@ -199,7 +220,7 @@ jobs:
           
           echo "Download confirmed."
 
-      # 6. 上传产物
+      # 6. 上传产物 (保持不变)
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
