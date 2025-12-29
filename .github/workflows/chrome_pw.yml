@@ -131,7 +131,7 @@ jobs:
           # 定义配置路径（与之前 Shell 脚本保持一致）
           USER_DATA_DIR = '/home/appuser/.config/google-chrome'
           EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
-
+          
           with sync_playwright() as p:
               print("🚀 正在启动 Playwright (System Chrome)...")
               
@@ -203,10 +203,7 @@ jobs:
                   time.sleep(10)
           EOF
 
-          # 在后台运行自动化脚本
-          export DISPLAY=:99
-          su appuser -c "nohup python3 /home/appuser/automate.py > /home/appuser/chrome.log 2>&1 &"
-          
+
           # Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
@@ -226,7 +223,10 @@ jobs:
           echo "🖥️  XFCE Desktop Ready!"
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
-
+          
+          # 在后台运行自动化脚本
+          export DISPLAY=:99
+          su appuser -c "nohup python3 /home/appuser/automate.py > /home/appuser/chrome.log 2>&1 &"
           tail -f /home/appuser/chrome.log
 
       # 5. 监控下载 (逻辑不变)
