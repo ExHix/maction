@@ -120,13 +120,14 @@ jobs:
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
       - name: Launch Firefox & Tunnel
+        shell: bash  # <--- 强制使用 Bash，避免 sh 报错
         run: |
-          # 1. 安装 Playwright Python 库 (但不运行 install firefox)
+          # 1. 安装 Playwright Python 库
           pip3 install playwright playwright-stealth
 
           # 2. 编写 Python 启动脚本
-          #    该脚本将接管 Firefox 的启动，替代原有的 `nohup firefox ...`
-          cat <<EOF > /home/appuser/start_firefox.py
+          # 使用 'EOF' 防止 shell 尝试解析 Python 代码内部的字符
+          cat <<'EOF' > /home/appuser/start_firefox.py
           import asyncio
           import os
           from playwright.async_api import async_playwright
@@ -143,18 +144,16 @@ jobs:
                   print(f"📂 Loading Profile from: {PROFILE_DIR}")
 
                   # 启动持久化上下文
-                  # ignore_default_args: 防止 Playwright 添加默认的自动化标志
                   context = await p.firefox.launch_persistent_context(
                       user_data_dir=PROFILE_DIR,
                       executable_path=EXECUTABLE_PATH,
                       headless=False,  # 必须为 False 才能在 VNC 看到
                       viewport={"width": 1440, "height": 900},
                       args=[
-                          "--no-remote", # 保证独立实例
-                          "--kiosk",     # 可选：全屏，如果不喜欢可删掉
+                          "--no-remote", 
+                          "--kiosk",
                       ],
-                      # 尽管 user.js 已经配置，这里再次强制覆盖关键反爬参数
-                      # 以防止 Playwright 启动参数冲掉 user.js 的设置
+                      # 强制覆盖关键反爬参数
                       user_prefs={
                           "dom.webdriver.enabled": False,
                           "use_automation_extension": False,
@@ -163,10 +162,10 @@ jobs:
 
                   page = context.pages[0] if context.pages else await context.new_page()
 
-                  # 3. 加载 Playwright Stealth (抹除 JS 运行时特征)
+                  # 加载 Playwright Stealth
                   await stealth_async(page)
 
-                  # 4. 访问目标
+                  # 访问目标
                   target_url = "https://decrypt.day/app/id1489932710"
                   print(f"🔗 Navigating to: {target_url}")
                   
@@ -176,9 +175,7 @@ jobs:
                   except Exception as e:
                       print(f"⚠️ Navigation warning: {e}")
 
-                  # 5. 挂起脚本
-                  # 只要这个 Python 脚本不结束，Firefox 就会一直开着
-                  # 你可以通过 VNC 进来操作，或者后续增加自动化点击代码
+                  # 挂起脚本
                   print("⏸️  Firefox is running. Waiting for manual interaction...")
                   while True:
                       await asyncio.sleep(5)
@@ -193,7 +190,7 @@ jobs:
           export DISPLAY=:99
           export HOME=/home/appuser
           
-          # 运行 Python 脚本并将日志输出，方便调试
+          # 运行 Python 脚本并将日志输出
           nohup python3 /home/appuser/start_firefox.py > /home/appuser/firefox_automation.log 2>&1 &
           EOF
 
@@ -203,24 +200,33 @@ jobs:
           echo "Firefox launching via Playwright..."
           sleep 10
           
-          # --- 以下是 Cloudflare Tunnel 部分 (保持不变) ---
+          # --- Cloudflare Tunnel 部分 ---
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
+          # 启动 tunnel，不转义
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
+          # 修正后的循环：去掉了变量前的反斜杠
           for i in $(seq 1 10); do
-            TUNNEL_URL=\$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-            if [ -n "\$TUNNEL_URL" ]; then
-                echo "Found Tunnel URL: \$TUNNEL_URL"
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+            
+            if [ -n "$TUNNEL_URL" ]; then
+                echo "Found Tunnel URL: $TUNNEL_URL"
                 break
             fi
-            sleep 1
+            
+            echo "Attempt $i: Tunnel not ready yet..."
+            if [ "$i" -eq 10 ]; then
+                echo "Error: Failed to find Tunnel URL."
+                exit 1
+            fi
+            sleep 2
           done
           
           echo "=========================================================="
           echo "🖥️  XFCE Desktop Ready (System Firefox + Playwright)!"
-          echo "🔗  VNC Link: \$TUNNEL_URL/vnc.html?autoconnect=true"
+          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
 
           tail -f /home/appuser/firefox_automation.log
