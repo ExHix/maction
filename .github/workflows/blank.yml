@@ -155,32 +155,28 @@ jobs:
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo $TUNNEL_URL
-          if [ $TUNNEL_URL ]; then
-            echo "Pass"
-          fi
-          sleep 3
-          
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          echo $TUNNEL_URL
-          if [ $TUNNEL_URL ]; then
-            echo "Pass"
-          fi
-          sleep 3
-          
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          if [ $TUNNEL_URL ]; then
-            echo "Pass"
-          fi
-          echo $TUNNEL_URL
-          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-          
+          for i in $(seq 1 10); do
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+
+            if [ -n "$TUNNEL_URL" ]; then
+                echo "Found Tunnel URL: $TUNNEL_URL"
+                echo "Pass"
+                break
+            fi
+
+            echo "Attempt $i: Tunnel not ready yet, retrying..."
+            
+            if [ "$i" -eq 10 ]; then
+                echo "Error: Failed to find Tunnel URL after 10 seconds."
+                exit 1
+            fi
+
+            sleep 1
+          done
           
           echo "=========================================================="
           echo "🖥️  XFCE Desktop Ready!"
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
-          echo "    (VNC 界面会有任务栏和文件管理器，操作更方便)"
           echo "=========================================================="
 
       # 5. 监控下载并校验 (保持原有逻辑)
