@@ -132,52 +132,47 @@ jobs:
           from playwright.async_api import async_playwright
           from playwright_stealth import stealth_async
 
-          # 指定之前步骤创建的配置目录
+          # 指向你之前在 Step 2 创建的配置目录
+          # 注意：Playwright 会把这个目录直接当作 Profile 根目录
           PROFILE_DIR = "/home/appuser/.mozilla/firefox/stealth.default"
-          # 指定系统安装的 Firefox 路径
           EXECUTABLE_PATH = "/usr/bin/firefox"
 
           async def run():
               async with async_playwright() as p:
-                  print(f"🚀 Launching System Firefox from: {EXECUTABLE_PATH}")
-                  print(f"📂 Loading Profile from: {PROFILE_DIR}")
+                  print(f"🚀 Launching System Firefox: {EXECUTABLE_PATH}")
+                  print(f"📂 Using Existing Profile: {PROFILE_DIR}")
 
                   # 启动持久化上下文
+                  # 我们移除了 user_prefs 参数，因为 Firefox 会自动读取 PROFILE_DIR 下的 user.js
                   context = await p.firefox.launch_persistent_context(
                       user_data_dir=PROFILE_DIR,
                       executable_path=EXECUTABLE_PATH,
-                      headless=False,  # 必须为 False 才能在 VNC 看到
+                      headless=False,
                       viewport={"width": 1440, "height": 900},
+                      # 这里的 args 确保不会干扰你现有的配置
                       args=[
-                          "--no-remote", 
-                          "--kiosk",
-                      ],
-                      # 强制覆盖关键反爬参数
-                      user_prefs={
-                          "dom.webdriver.enabled": False,
-                          "use_automation_extension": False,
-                      }
+                          "--no-remote",
+                      ]
                   )
 
                   page = context.pages[0] if context.pages else await context.new_page()
 
-                  # 加载 Playwright Stealth
+                  # 额外的一层防护：注入 Stealth 脚本覆盖运行时特征
                   await stealth_async(page)
 
-                  # 访问目标
                   target_url = "https://decrypt.day/app/id1489932710"
                   print(f"🔗 Navigating to: {target_url}")
                   
                   try:
+                      # 使用较长的超时，确保在 Action 环境下稳定
                       await page.goto(target_url, timeout=90000, wait_until="domcontentloaded")
-                      print("✅ Page loaded successfully.")
+                      print("✅ Page loaded. You can now check the VNC desktop.")
                   except Exception as e:
                       print(f"⚠️ Navigation warning: {e}")
 
-                  # 挂起脚本
-                  print("⏸️  Firefox is running. Waiting for manual interaction...")
+                  # 保持运行，防止浏览器关闭
                   while True:
-                      await asyncio.sleep(5)
+                      await asyncio.sleep(10)
 
           if __name__ == "__main__":
               asyncio.run(run())
