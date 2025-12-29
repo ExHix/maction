@@ -1,4 +1,4 @@
-name: Chrome XFCE Desktop VNC
+name: Chrome XFCE Desktop VNC (Auto)
 on: 
   workflow_dispatch:
 
