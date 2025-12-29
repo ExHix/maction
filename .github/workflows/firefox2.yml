@@ -136,6 +136,7 @@ jobs:
           # 注意：Playwright 会把这个目录直接当作 Profile 根目录
           PROFILE_DIR = "/home/appuser/.mozilla/firefox/stealth.default"
           EXECUTABLE_PATH = "/usr/bin/firefox"
+          DOWNLOAD_DIR = "/home/appuser/Downloads"
 
           async def run():
               async with async_playwright() as p:
