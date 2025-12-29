@@ -1,4 +1,4 @@
-name: Playwright Chrome Automation
+name: System Chrome Playwright Bot
 on: 
   workflow_dispatch:
 
@@ -24,20 +24,15 @@ jobs:
                              python3 python3-pip xvfb x11vnc \
                              libgbm1 libnss3 libasound2 libatk-bridge2.0-0 libgtk-3-0
           
-          # 安装 Google Chrome (正式版比 Chromium 更难被检测)
+          # === 核心：安装系统级 Google Chrome ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           apt-get install -y ./google-chrome-stable_current_amd64.deb
           rm google-chrome-stable_current_amd64.deb
           
-          # 安装 Python 依赖
-          # playwright: 自动化核心
-          # playwright-stealth: 专门用于隐藏自动化特征的库
+          # === 仅安装 Python 库，不运行 playwright install ===
           pip3 install playwright playwright-stealth
           
-          # 安装 Playwright 驱动 (这里只安装 chrome 相关的驱动即可，但我们需要让 playwright 识别系统 chrome)
-          playwright install-deps
-          
-          # 安装 XFCE4 (用于 VNC 观察，可选但推荐)
+          # 安装 XFCE4 (VNC桌面)
           apt-get install -y dbus-x11 xfce4 xfce4-goodies xfce4-terminal
           
           # 准备用户目录
@@ -45,15 +40,15 @@ jobs:
           echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           su appuser -c "mkdir -p /home/appuser/Downloads"
 
-      # 2. 启动 XFCE 桌面 (后台运行)
+      # 2. 启动 XFCE 桌面
       - name: Start Virtual Desktop (Xvfb)
         run: |
           service dbus start || true
           
-          # 启动脚本
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
+          # 1440x900 分辨率
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 2
           startxfce4 &
@@ -63,10 +58,10 @@ jobs:
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
           
-          # 优化显示设置防止黑屏
+          # 防止锁屏
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 3. 编写 Playwright 自动化脚本
+      # 3. 编写 Python 自动化脚本 (指定 executable_path)
       - name: Create Python Automation Script
         run: |
           cat <<EOF > /home/appuser/bot.py
@@ -75,138 +70,109 @@ jobs:
           from playwright.sync_api import sync_playwright
           from playwright_stealth import stealth_sync
 
-          # 配置
           TARGET_URL = "https://decrypt.day/app/id1489932710"
           DOWNLOAD_DIR = "/home/appuser/Downloads"
 
           def run():
               with sync_playwright() as p:
-                  # === 防检测核心配置 ===
-                  # 1. 使用 'chrome' 通道，调用真实的 Google Chrome
-                  # 2. disable-blink-features=AutomationControlled 是最关键的参数
-                  # 3. headless=False: 在有 UI 环境下运行，极难被检测
+                  print("🚀 Launching System Google Chrome...")
+                  
+                  # === 核心修改：指定 executable_path ===
                   browser = p.chromium.launch(
-                      channel="chrome",
-                      headless=False, 
+                      # 强制使用系统安装的 Chrome 路径
+                      executable_path="/usr/bin/google-chrome", 
+                      
+                      headless=False, # 必须为 False 才能配合 Xvfb 绕过检测
+                      
+                      # 防检测参数
                       args=[
                           "--disable-blink-features=AutomationControlled",
                           "--start-maximized",
                           "--no-sandbox",
-                          "--disable-infobars"
+                          "--disable-infobars",
+                          "--disable-dev-shm-usage" # 容器环境推荐加上这个
                       ]
                   )
                   
-                  # 创建上下文，模拟真实 UserAgent 和 视口
                   context = browser.new_context(
                       viewport={"width": 1440, "height": 900},
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                      user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                       accept_downloads=True
                   )
                   
                   page = context.new_page()
                   
-                  # === 应用 stealth 插件 (移除 navigator.webdriver 等特征) ===
+                  # 应用 Stealth (掩盖指纹)
                   stealth_sync(page)
 
-                  print(f"🚀 Navigating to {TARGET_URL}...")
-                  page.goto(TARGET_URL, timeout=60000)
+                  print(f"🌍 Navigating to {TARGET_URL}...")
                   
-                  # 截图以便在 Artifacts 中调试查看
-                  page.screenshot(path="/home/appuser/Downloads/debug_page_load.png")
-                  
-                  # === 自动化逻辑 (示例) ===
-                  # 这里需要根据 decrypt.day 的实际 DOM 结构修改
-                  # 假设有一个 "Download" 按钮，或者需要登录
-                  
-                  print("Waiting for page load...")
-                  
-                  # 示例：检测 Cloudflare 验证
-                  if "Just a moment" in page.title():
-                      print("⚠️ Cloudflare challenge detected, waiting...")
-                      time.sleep(10)
-                  
-                  # --- 场景 A: 自动触发下载 (示例) ---
-                  # 使用 expect_download 捕获下载事件
                   try:
-                      # 这里的逻辑需要你根据实际网页调整
-                      # 例如：点击页面上的某个按钮
-                      # page.get_by_text("Download").click() 
+                      page.goto(TARGET_URL, timeout=1900000)
                       
-                      # 如果页面加载即自动下载，或需要寻找特定按钮：
-                      print("Looking for download triggers...")
+                      # 截图调试 1
+                      page.screenshot(path="/home/appuser/Downloads/1_loaded.png")
                       
-                      # 模拟鼠标随机移动 (增加真实感)
-                      page.mouse.move(100, 100)
-                      page.mouse.move(500, 500)
+                      # === 你的业务逻辑 ===
+                      # 这里仅仅是等待示例，你需要根据实际页面补充点击逻辑
+                      # 例如: page.get_by_text("Download").click()
                       
-                      # 注意：这里需要你填入真实的下载按钮选择器
-                      # page.locator("button.download-btn").click()
+                      # 示例：检测标题
+                      print(f"Page Title: {page.title()}")
                       
-                      # 暂时挂起等待人工观察 (如果有 VNC) 或等待自动下载
-                      # 如果是为了 decrypt.day，通常需要点击登录 -> 点击 App -> 点击下载
-                      # 下面是一个通用的等待下载模式：
+                      # 模拟鼠标移动
+                      page.mouse.move(200, 200)
+                      time.sleep(1)
+                      page.mouse.move(500, 400)
                       
-                      print("Waiting for download event...")
-                      # 增加超时时间，等待下载开始
-                      with page.expect_download(timeout=3200000) as download_info:
-                          # 触发下载的动作放在这里，例如点击:
-                          # page.get_by_role("button", name="Download IPA").click()
-                          
-                          # 如果不做任何操作它就会弹下载，则留空，或者只是等待
-                          # 为了演示，我们假设页面加载 5 秒后会有下载行为，或者你可以通过 VNC 手动点
-                          pass
-                          
-                      download = download_info.value
-                      print(f"✅ Download started: {download.suggested_filename}")
+                      # 如果页面有自动下载，或者你点击了下载按钮，等待下载完成
+                      # 这里设置一个长时间等待方便你在 VNC 里观察
+                      time.sleep(1000)
                       
-                      # 保存文件
-                      save_path = os.path.join(DOWNLOAD_DIR, download.suggested_filename)
-                      download.save_as(save_path)
-                      print(f"💾 File saved to: {save_path}")
+                      page.screenshot(path="/home/appuser/Downloads/2_finished.png")
                       
                   except Exception as e:
-                      print(f"❌ Error or Timeout: {e}")
-                      # 截图报错
-                      page.screenshot(path="/home/appuser/Downloads/error_state.png")
-
-                  # 保持浏览器开启一会，确保数据写入
-                  time.sleep(5)
-                  browser.close()
+                      print(f"❌ Error: {e}")
+                      page.screenshot(path="/home/appuser/Downloads/error.png")
+                  finally:
+                      browser.close()
 
           if __name__ == "__main__":
               run()
           EOF
 
-      # 4. 建立 VNC 连接 (可选，方便你在 GitHub Actions 运行时进去看)
+      # 4. 建立 VNC 连接 (可选)
       - name: Setup Cloudflare Tunnel (VNC)
         run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
-          su appuser -c "cloudflared tunnel --url http://localhost:6080 > /home/appuser/tunnel.log 2>&1 &"
+          cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
-          # 安装 noVNC 代理 (为了 Web 访问)
-          git clone https://github.com/novnc/noVNC.git /opt/noVNC
-          git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
-          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 --daemon
+          echo "Waiting for Tunnel..."
+          for i in $(seq 1 10); do
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+            if [ -n "$TUNNEL_URL" ]; then
+                echo "Found Tunnel URL: $TUNNEL_URL"
+                break
+            fi
+            sleep 1
+          done
+          
+          echo "=========================================================="
+          echo "🖥️  XFCE Desktop Ready!"
+          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
+          echo "=========================================================="
 
-          sleep 5
-          echo "🔗 VNC URL (Check tunnel.log inside artifacts if not printed):"
-          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" /home/appuser/tunnel.log || echo "Tunnel finding..."
-
-      # 5. 运行 Python 自动化脚本
+      # 5. 运行 Python 脚本
       - name: Run Playwright Bot
         run: |
           export DISPLAY=:99
-          # 安装 Playwright 浏览器 (以防万一)
-          su appuser -c "python3 -m playwright install chromium"
-          
-          echo "Running automation..."
+          # 无需运行 playwright install，直接跑脚本
           su appuser -c "python3 /home/appuser/bot.py"
 
-      # 6. 上传结果
+      # 6. 上传截图和下载文件
       - name: Upload Artifacts
-        if: always() # 即使失败也上传截图
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bot-results
