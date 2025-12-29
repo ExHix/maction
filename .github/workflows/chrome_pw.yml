@@ -276,6 +276,7 @@ jobs:
               dl_page.goto(download_page_url, referer=base_url)
 
               btn = dl_page.locator("button.btn-download").filter(has_text="Get download link")
+
               btn.click()
               # btn.scroll_into_view_if_needed()
               # box = btn.bounding_box()
@@ -307,13 +308,27 @@ jobs:
 
               print("????...")
               btn = dl_page.locator("button.btn-download")#.filter(has_text="Download")
-              btn.click()
+              
+              with dl_page.expect_download() as download_info:
+                  btn.click()
+
+              download = download_info.value
+
+              # 3. 指定你想要的下载路径
+              # 比如你想下载到 /home/appuser/Downloads 并保留原始文件名
+              download_path = os.path.join("/home/appuser/Downloads", f"{download.suggested_filename}_result.ipa")
+
+              # 4. 执行保存操作
+              download.save_as(download_path)
+
+              print(f"✅ 文件已成功保存至: {download_path}")
 
               debug_pause(">>> ?????????...")
 
               print("[Script] \u6d4f\u89c8\u5668\u4fdd\u6301\u5f00\u542f\uff0c\u7b49\u5f85 Action \u7ed3\u675f...")
-              while True:
-                  time.sleep(10)
+              
+              time.sleep(5)
+              print("Exited")
 
           EOF
 
@@ -336,9 +351,10 @@ jobs:
     
           chmod +x /home/appuser/run_bot.sh
           su appuser -c "/home/appuser/run_bot.sh"
+          PW_PID=$! 
           
           echo "🤖 Script running..."
-          tail -f /home/appuser/bot.log
+          tail -f /home/appuser/bot.log --pid=$PW_PID
 
       # 5. 监控下载 (逻辑不变)
       - name: Monitor Download (Wait for IPA)
