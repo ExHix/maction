@@ -151,7 +151,7 @@ jobs:
               # 使用 launch_persistent_context 以保持 UserDataDir 和配置
               browser = p.chromium.launch(
                   #user_data_dir=USER_DATA_DIR,
-                  #executable_path=EXECUTABLE_PATH,
+                  executable_path=EXECUTABLE_PATH,
                   headless=False,  # 必须为 False 才能在 VNC 看到
                   #viewport=None,   # 禁用默认视口大小，跟随窗口
                   args=[
