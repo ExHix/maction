@@ -1,4 +1,4 @@
-name: Chrome XFCE Desktop VNC + Playwright CDP
+name: Chrome XFCE Desktop VNC (Auto)
 on: 
   workflow_dispatch:
 
@@ -7,49 +7,40 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+      # 增加 --shm-size 防止 Chrome 崩溃 (Chrome 对内存共享要求很高)
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 + XFCE4 + Chrome + Python Pip
-      - name: Install System & Desktop & Chrome
+      # 1. 安装基础环境 + XFCE4 + Chrome
+      - name: Install System & Desktop (XFCE4) & Chrome
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 🔍 增加 python3-pip 用于安装 playwright
+          # 安装基础工具 (添加了 python3-pip)
           apt-get install -y wget curl git net-tools sudo vim unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
           
-          # === 安装 Google Chrome ===
+          # === 以下保持不变 ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           apt-get install -y ./google-chrome-stable_current_amd64.deb
           rm google-chrome-stable_current_amd64.deb
-          
-          # 安装字体
           apt-get install -y fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer
-          
-          # === 安装 XFCE4 ===
           apt-get install -y xvfb x11vnc python3 pulseaudio dbus-x11 xfce4 xfce4-goodies xfce4-terminal
-          
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
-          
-          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 2. 安装 Playwright 库 (不需要 install-deps 或 install chrome，因为我们只用 client)
-      - name: Install Python Playwright
-        run: |
-          pip3 install playwright
-          # 这一步不是必须的，因为我们用本地 Chrome，但安装它可以防止缺少某些底层依赖
-          playwright install-deps chromium 
+          # 安装 DrissionPage
+          pip3 install playwright tf-playwright-stealth
+          playwright install-deps chromium
 
-      # 3. 创建用户 & 配置 Chrome 反爬策略
+      # 2. 创建用户 & 配置 Chrome 反爬策略
       - name: Setup User & Chrome Preferences
         run: |
           useradd -m -s /bin/bash appuser
@@ -96,22 +87,19 @@ jobs:
           }
           EOF"
 
-      # 4. 启动 XFCE 桌面
+      # 3. 启动 XFCE 桌面
       - name: Start XFCE Desktop
         run: |
           service dbus start || true
-          
+  
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 2
-          
           export XFCE_PANEL_MIGRATE_DEFAULT=true
           startxfce4 &
-          
           x11vnc -display :99 -forever -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
@@ -122,53 +110,9 @@ jobs:
           sleep 5
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 5. 启动 Chrome (带防检测参数 + 调试端口)
-      - name: Launch Chrome & Cloudflare Tunnel
+      # 4. 启动 Chrome (通过 Playwright 自动化) & Cloudflare Tunnel
+      - name: Cloudflare Tunnel
         run: |
-          cat <<EOF > /home/appuser/run_chrome.sh
-          #!/bin/bash
-          export DISPLAY=:99
-          export HOME=/home/appuser
-          
-          # === 修正点 1: 增加 --remote-allow-origins=* ===
-          # 新版 Chrome (v110+) 加强了安全性，WebSocket 连接必须显式允许来源
-          
-          nohup google-chrome-stable \\
-            --no-first-run \\
-            --no-sandbox \\
-            --no-default-browser-check \\
-            --disable-infobars \\
-            --disable-blink-features=AutomationControlled \\
-            --password-store=basic \\
-            --start-maximized \\
-            --user-data-dir=/home/appuser/.config/google-chrome \\
-            "https://decrypt.day/app/id1489932710" > /home/appuser/chrome.log 2>&1 &
-          EOF
-          
-          chmod +x /home/appuser/run_chrome.sh
-          su appuser -c "/home/appuser/run_chrome.sh"
-          
-          echo "Chrome launched command sent."
-
-          # === 修正点 2: 主动等待端口开启 ===
-          echo "Waiting for Chrome Debugging Port (9222) to open..."
-          for i in $(seq 1 30); do
-            # 使用 curl 测试接口是否响应 (比 nc 更通用)
-            if curl -s http://127.0.0.1:9222/json/version > /dev/null; then
-              echo "✅ Chrome Debugging Port is READY!"
-              break
-            fi
-            echo "Waiting for port 9222... ($i/30)"
-            sleep 1
-            
-            # 如果等了 5 秒还没好，看一眼日志有没有报错
-            if [ "$i" -eq 5 ]; then
-               echo "--- Chrome Log Preview (Early Check) ---"
-               cat /home/appuser/chrome.log || true
-               echo "--------------------------------------"
-            fi
-          done
-          
           # Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
@@ -188,66 +132,167 @@ jobs:
           echo "🖥️  XFCE Desktop Ready!"
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
-
-      # 6. 🔍 新增步骤：Playwright CDP 连接验证
-      - name: Run Playwright PoC Script
+      
+      - name: Launch Chrome
         run: |
-          cat <<EOF > poc_script.py
+          
+
+          cat <<'EOF' > /home/appuser/get_ipa.py
           from playwright.sync_api import sync_playwright
+          from playwright_stealth import stealth_sync
           import time
-          import sys
+          import os, json
 
-          def run():
-              print(">>> Python Script Start")
+          # 定义配置路径（与之前 Shell 脚本保持一致）
+          USER_DATA_DIR = '/home/appuser/.config/google-chrome'
+          EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
+          base_url = "https://decrypt.day/app/id1489932710"
+          
+          with sync_playwright() as p:
+              print("🚀 正在启动 Playwright (System Chrome)...")
+              
+              # 使用 launch_persistent_context 以保持 UserDataDir 和配置
+              browser = p.chromium.launch(
+                  #user_data_dir=USER_DATA_DIR,
+                  executable_path=EXECUTABLE_PATH,
+                  headless=False,  # 必须为 False 才能在 VNC 看到
+                  #viewport=None,   # 禁用默认视口大小，跟随窗口
+                  args=[
+                      '--no-sandbox',
+                      '--disable-gpu',
+                      # === 核心反爬参数 ===
+                      # '--disable-blink-features=AutomationControlled', 
+                      # '--start-maximized',
+                      # '--no-first-run',
+                      # '--no-default-browser-check',
+                      # '--disable-dev-shm-usage',
+                  ],
+                  ignore_default_args=["--enable-automation"],
+              )
+              
+              # 获取默认页面或新建页面
+              # print("New pages...")
+              # page = browser.new_page()
+              
+              # # === 额外反爬措施：移除 navigator.webdriver 属性 ===
+              # # DrissionPage 默认会自动处理这个，Playwright 需要手动注入
+              # page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+              
+              # print("🔗 正在访问目标页面...")
+              # try:
+              #     page.goto('https://decrypt.day/app/id1489932710', timeout=60000)
+              #     print("✅ 页面加载完成")
+              # except Exception as e:
+              #     print(f"⚠️ 页面加载可能超时: {e}")
+
+              # # 保持运行，等待 VNC 查看或后续操作
+              # while True:
+              #     time.sleep(10)
+
+              context = browser.new_context()
+              
+              # 再次确保 webdriver 属性被抹除
+              context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+
+              page = context.new_page()
+              stealth_sync(page)
+              print(f"[Script] 打开页面: {base_url}")
+              
               try:
-                  with sync_playwright() as p:
-                      # === 修正点 3: 强制使用 127.0.0.1 避免 IPv6 ::1 错误 ===
-                      print(">>> Connecting to browser at http://127.0.0.1:9222 ...")
-                      browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
-                      
-                      context = browser.contexts[0]
-                      if not context.pages:
-                          print(">>> No pages found, creating one...")
-                          page = context.new_page()
-                      else:
-                          page = context.pages[0]
-                      
-                      print(f">>> Success! Connected to page: {page.title()}")
-                      
-                      # 简单的验证动作
-                      page.wait_for_timeout(2000)
-                      page.screenshot(path="/home/appuser/Downloads/poc_proof.png")
-                      print(">>> Screenshot saved.")
-                      
-                      browser.disconnect()
-                      
+                  page.goto(base_url, timeout=90000)
+                  page.wait_for_load_state("domcontentloaded")
               except Exception as e:
-                  print(f"!!! Python Error: {e}")
-                  sys.exit(1)
+                  print(f"[Script] 警告: 页面加载 {e}")
 
-          if __name__ == "__main__":
-              run()
+              # Cloudflare 检测
+              if "Just a moment" in page.title() or "Cloudflare" in page.title():
+                  print("\n" + "!"*30)
+                  print("[!] Cloudflare 拦截！请进 VNC 手动验证！")
+                  print("!"*30 + "\n")
+                  time.sleep(30)
+
+              print("[Script] 解析下载逻辑...")
+              try:
+                  # 模拟前端请求获取下载配置
+                  js_code = """
+                      async () => {
+                          const formData = new FormData();
+                          formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
+                          const resp = await fetch('""" + base_url + """?/files', {method: 'POST', body: formData});
+                          return await resp.text();
+                      }
+                  """
+                  result = page.evaluate(js_code)
+                  data_json = json.loads(result)
+                  dl_list = json.loads(data_json.get("data", "[]"))
+                  
+                  target_path = ""
+                  for item in dl_list:
+                      if isinstance(item, str) and len(item) == 21:
+                          target_path = item
+                          break
+                  
+                  if not target_path and "gofile.io" in dl_list:
+                        idx = dl_list.index("gofile.io")
+                        target_path = dl_list[idx-3]
+
+                  if not target_path:
+                      print("[Script] 未找到路径，请手动操作。")
+                  else:
+                      dl_url = f"{base_url}/dl/{target_path}"
+                      print(f"[Script] 下载页: {dl_url}")
+                      dl_page = context.new_page()
+                      stealth_sync(dl_page)
+                      dl_page.goto(dl_url, referer=base_url)
+                      
+                      print("[Script] 点击 'Get download link'...")
+                      dl_page.locator("button.btn-download").filter(has_text="Get download link").click()
+                      time.sleep(3)
+                      
+                      print("[Script] 点击 'Download'...")
+                      with dl_page.expect_download(timeout=60000) as download_info:
+                          dl_page.locator("button.btn-download").filter(has_text="Download").click()
+                      
+                      download = download_info.value
+                      print(f"[Script] 下载开始: {download.suggested_filename}")
+                      final_path = os.path.join("/home/appuser/Downloads", download.suggested_filename)
+                      download.save_as(final_path)
+                      print(f"[Script] ✅ 保存成功: {final_path}")
+
+              except Exception as e:
+                  print(f"[Script] 流程错误: {e}")
+                  import traceback
+                  traceback.print_exc()
+
+              print("[Script] 浏览器保持开启，等待 Action 结束...")
+              while True:
+                  time.sleep(10)
           EOF
 
-          tail -n 20 /home/appuser/chrome.log
+          chown appuser:appuser /home/appuser/get_ipa.py
+          chmod +x /home/appuser/get_ipa.py
 
-          # 先检查一下端口还在不在
-          if curl -s http://127.0.0.1:9222/json/version > /dev/null; then
-              python3 poc_script.py
-          else
-              echo "❌ Port 9222 is closed! Chrome crashed?"
-              echo "--- FINAL CHROME LOG ---"
-              cat /home/appuser/chrome.log
-              exit 1
-          fi
+          touch /home/appuser/bot.log
+          chmod 666 /home/appuser/bot.log
 
-          # 执行脚本 (注意：因为 Chrome 是 appuser 启动的，但端口是 localhost，root 也可以连)
-          # 为了文件权限统一，建议用 su appuser 执行，或者 root 执行但注意写入路径
-          # 这里直接运行 python3 即可
+          cat <<EOF > /home/appuser/run_bot.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
+          export LIBGL_ALWAYS_SOFTWARE=1
           
-          su appuser -c "python3 poc_script.py"
+          #nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
+          python3 -u /home/appuser/get_ipa.py
+          EOF
+          
+    
+          chmod +x /home/appuser/run_bot.sh
+          su appuser -c "/home/appuser/run_bot.sh"
+          
+          echo "🤖 Script running..."
+          tail -f /home/appuser/bot.log
 
-      # 7. 监控下载 (保持不变)
+      # 5. 监控下载 (逻辑不变)
       - name: Monitor Download (Wait for IPA)
         timeout-minutes: 30
         run: |
@@ -257,14 +302,20 @@ jobs:
           echo "Starting monitoring loop in $TARGET_DIR"
           
           while true; do
+            # Chrome 下载临时文件通常是 .crdownload
             FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
             
             if [ -n "$FILE" ]; then
               BASENAME=$(basename "$FILE")
+              
+              # 检查 Chrome 的临时文件后缀
               if [ -f "${FILE}.crdownload" ]; then
                  echo "⏳ Downloading (crdownload present): $BASENAME..."
               else
+                 # 双重检查文件大小变化，确保下载完成
                  SIZE_MB=$(du -m "$FILE" | cut -f1)
+                 
+                 # 简单的防误判：如果文件太小，可能还没开始写真正的数据
                  if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
                    echo "⚠️ Found $BASENAME ($SIZE_MB MB), waiting for full file..."
                  else
@@ -280,11 +331,9 @@ jobs:
           
           echo "Download confirmed."
 
-      # 8. 上传产物 (包含 IPA 和 PoC 截图)
-      - name: Upload Artifacts
+      # 6. 上传产物
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: downloaded-files
-          path: |
-            /home/appuser/Downloads/*.ipa
-            /home/appuser/Downloads/*.png
+          name: decrypted-app
+          path: /home/appuser/Downloads/*.ipa
