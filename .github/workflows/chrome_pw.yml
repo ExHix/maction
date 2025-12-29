@@ -20,7 +20,9 @@ jobs:
         run: |
           apt-get update
           # 安装基础工具
-          apt-get install -y wget curl git net-tools sudo vim unzip xz-utils libgbm1 libnss3 libasound2
+          apt-get install -y wget curl git net-tools sudo vim unzip xz-utils \
+                             python3 python3-pip xvfb x11vnc \
+                             libgbm1 libnss3 libasound2 libatk-bridge2.0-0 libgtk-3-0
           
           # === 核心修改：安装 Google Chrome ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
