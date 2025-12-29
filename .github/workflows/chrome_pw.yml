@@ -161,8 +161,10 @@ jobs:
                       '--disable-blink-features=AutomationControlled', 
                       '--start-maximized',
                       '--no-first-run',
-                      '--no-default-browser-check'
-                  ]
+                      '--no-default-browser-check',
+                      '--disable-dev-shm-usage',
+                  ],
+                  ignore_default_args=["--enable-automation"],
               )
               
               # 获取默认页面或新建页面
