@@ -209,17 +209,22 @@ jobs:
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo $TUNNEL_URL
           sleep 3
-          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo $TUNNEL_URL
           sleep 3
-          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo $TUNNEL_URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
           echo "🤖 Firefox is running via Playwright"
           echo "🔗 VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
+
+          tail -f /home/appuser/playwright.log
 
       # 5. 监控下载 (保持不变)
       - name: Monitor Download (Wait for IPA)
