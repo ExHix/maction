@@ -76,15 +76,29 @@ jobs:
           
           # 写入 user.js (Playwright 加载此目录时会自动生效这些配置)
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
+          // 1. 基础反爬 (保持不变)
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
+          
+          // 2. 必须禁用的隐私保护 (修复 AdBlock 检测)
+          // 关闭增强跟踪保护
           user_pref(\"privacy.trackingprotection.enabled\", false);
-          user_pref(\"network.cookie.cookieBehavior\", 0); 
-          user_pref(\"dom.disable_open_during_load\", false);
-          user_pref(\"browser.download.folderList\", 2);
-          user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
-          user_pref(\"browser.download.useDownloadDir\", true);
+          user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
+          user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
+          user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
+          user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
+          
+          // 允许所有 Cookie (很多广告依赖第三方 Cookie)
+          user_pref(\"network.cookie.cookieBehavior\", 0); // 0 = Accept all
+          user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
+          
+          // 3. 其他可能触发检测的设置
+          user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
+          user_pref(\"dom.disable_open_during_load\", false); // 允许弹窗 (有些广告是弹窗)
+          
+          // 4. 保持 WebRTC 关闭 (防止 IP 泄露，如果广告一定需要 WebRTC 才能加载，这里可能需要改回 true)
+          user_pref(\"media.peerconnection.enabled\", false);
           EOF"
 
       # 3. 启动 XFCE 桌面
@@ -145,7 +159,7 @@ jobs:
                       user_data_dir=USER_DATA_DIR,
                       executable_path=EXECUTABLE_PATH,
                       headless=False,
-                      viewport={"width": 1440, "height": 900},
+                      #viewport={"width": 1440, "height": 900},
                       user_agent=USER_AGENT,  # 显式覆盖 UA
                       args=args,
                       ignore_default_args=["--enable-automation"], # 隐藏自动化提示条
@@ -182,7 +196,7 @@ jobs:
 
                   # 保持运行，等待人工/后续逻辑
                   while True:
-                      time.sleep(60)
+                      time.sleep(120)
 
           if __name__ == "__main__":
               run()
@@ -211,11 +225,22 @@ jobs:
           echo "Waiting for Tunnel..."
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           echo $TUNNEL_URL
+          if [ $TUNNEL_URL ]; then
+            echo "Pass"
+          fi
           sleep 3
+          
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           echo $TUNNEL_URL
+          if [ $TUNNEL_URL ]; then
+            echo "Pass"
+          fi
           sleep 3
+          
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          if [ $TUNNEL_URL ]; then
+            echo "Pass"
+          fi
           echo $TUNNEL_URL
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
