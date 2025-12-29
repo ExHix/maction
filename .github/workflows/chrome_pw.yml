@@ -137,7 +137,6 @@ jobs:
       - name: Launch Chrome
         run: |
           cat <<'EOF' > /home/appuser/get_ipa.py
-          cat <<EOF > /home/appuser/automate.py
           from playwright.sync_api import sync_playwright
           import time
           import os
