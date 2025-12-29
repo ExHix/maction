@@ -143,25 +143,23 @@ jobs:
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          for i in {1..10}; do
-              # 尝试提取 URL
-              TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          for i in $(seq 1 10); do
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
 
-              if [ -n "$TUNNEL_URL" ]; then
-                  echo "Found Tunnel URL: $TUNNEL_URL"
-                  echo "Pass"
-                  break
-              fi
+            if [ -n "$TUNNEL_URL" ]; then
+                echo "Found Tunnel URL: $TUNNEL_URL"
+                echo "Pass"
+                break
+            fi
 
-              echo "Attempt $i: Tunnel not ready yet, retrying..."
-              
-              # 如果是最后一次尝试依然没找到，则抛出错误
-              if [ $i -eq 10 ]; then
-                  echo "Error: Failed to find Tunnel URL after 10 seconds."
-                  exit 1
-              fi
+            echo "Attempt $i: Tunnel not ready yet, retrying..."
+            
+            if [ "$i" -eq 10 ]; then
+                echo "Error: Failed to find Tunnel URL after 10 seconds."
+                exit 1
+            fi
 
-              sleep 1
+            sleep 1
           done
                     
           echo "=========================================================="
