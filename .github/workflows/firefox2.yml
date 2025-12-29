@@ -140,19 +140,37 @@ jobs:
           async def run():
               async with async_playwright() as p:
                   print(f"🚀 Launching System Firefox: {EXECUTABLE_PATH}")
-                  print(f"📂 Using Existing Profile: {PROFILE_DIR}")
+                  print(f"📂 Loading Profile from: {PROFILE_DIR}")
+
+                  # 定义强制覆盖的首选项
+                  # 注意：这里会覆盖 profile 中 user.js 的同名设置
+                  fs_prefs = {
+                      "dom.webdriver.enabled": False,
+                      "use_automation_extension": False,
+                      "general.useragent.override": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                      "privacy.trackingprotection.enabled": False,
+                      "privacy.trackingprotection.pbmode.enabled": False,
+                      "network.cookie.cookieBehavior": 0,
+                      "dom.popup_allowed_events": "change click dblclick mouseup notificationclick reset submit touchend",
+                      # 下载配置
+                      "dom.disable_open_during_load": False,
+                      "media.peerconnection.enabled": False,
+                      "browser.download.dir": DOWNLOAD_DIR,
+                      "browser.download.folderList": 2, 
+                      "browser.download.useDownloadDir": True,
+                      "browser.download.manager.showWhenStarting": False,
+                      "browser.helperApps.neverAsk.saveToDisk": "application/octet-stream,application/iphone,application/x-itunes-ipa"
+                  }
 
                   # 启动持久化上下文
-                  # 我们移除了 user_prefs 参数，因为 Firefox 会自动读取 PROFILE_DIR 下的 user.js
                   context = await p.firefox.launch_persistent_context(
                       user_data_dir=PROFILE_DIR,
                       executable_path=EXECUTABLE_PATH,
                       headless=False,
                       viewport={"width": 1440, "height": 900},
-                      # 这里的 args 确保不会干扰你现有的配置
-                      args=[
-                          "--no-remote",
-                      ]
+                      args=["--no-remote"],
+                      # 关键修改：使用正确的参数名 firefox_user_prefs
+                      firefox_user_prefs=fs_prefs
                   )
 
                   page = context.pages[0] if context.pages else await context.new_page()
