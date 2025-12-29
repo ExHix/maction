@@ -146,7 +146,8 @@ jobs:
           # 定义配置路径（与之前 Shell 脚本保持一致）
           USER_DATA_DIR = '/home/appuser/.config/google-chrome'
           EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
-
+          base_url = "https://decrypt.day/app/id1489932710"
+          
           with sync_playwright() as p:
               print("🚀 正在启动 Playwright (System Chrome)...")
               
