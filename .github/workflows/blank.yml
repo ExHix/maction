@@ -1,4 +1,4 @@
-name: Firefox Allowed-Ads VNC
+name: Firefox XFCE Desktop VNC
 on: 
   workflow_dispatch:
 
@@ -7,22 +7,24 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+      # 增加 --shm-size 以防止 Firefox 和 XFCE 崩溃
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境
-      - name: Install System & Firefox
+      # 1. 安装基础环境 + XFCE4 桌面
+      - name: Install System & Desktop (XFCE4)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
+          # 安装基础工具
           apt-get install -y software-properties-common wget curl git net-tools sudo debconf-utils vim unzip
           
+          # 添加 Firefox PPA
           add-apt-repository -y ppa:mozillateam/ppa
-          
           echo '
           Package: *
           Pin: release o=LP-PPA-mozillateam
@@ -30,21 +32,39 @@ jobs:
           ' | tee /etc/apt/preferences.d/mozilla-firefox
           
           apt-get update
-          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer xvfb fluxbox x11vnc python3 pulseaudio dbus-x11
           
+          # 安装 Firefox 和 字体
+          apt-get install -y firefox fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer
+          
+          # === 核心修改：安装 XFCE4 桌面环境 (替换 Fluxbox) ===
+          # xfce4: 桌面核心
+          # xfce4-goodies: 包含图片查看器、截图工具等
+          # thunar: 文件管理器 (关键)
+          # dbus-x11: 必须组件
+          apt-get install -y xvfb x11vnc python3 pulseaudio dbus-x11 xfce4 xfce4-goodies xfce4-terminal
+          
+          # 同意微软字体协议
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
           
+          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-      # 2. 创建用户 & 配置“允许广告”的 Profile
+      # 2. 创建用户 & 配置 Firefox 反爬策略
       - name: Setup User & Firefox Profile
         run: |
           useradd -m -s /bin/bash appuser
+          # 给予 sudo 权限方便调试 (可选)
+          echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           
+          # 创建 Downloads 目录，方便在桌面文件管理器中看到
+          su appuser -c "mkdir -p /home/appuser/Downloads"
+          su appuser -c "mkdir -p /home/appuser/Desktop"
+          
+          # 创建 Firefox 配置目录
           su appuser -c "mkdir -p /home/appuser/.mozilla/firefox/stealth.default"
           
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/profiles.ini
@@ -59,35 +79,26 @@ jobs:
           Version=2
           EOF"
           
-          # 核心修改：写入允许广告和追踪的 user.js
+          # 写入 user.js (允许广告配置)
           su appuser -c "cat <<EOF > /home/appuser/.mozilla/firefox/stealth.default/user.js
-          // 1. 基础反爬 (保持不变)
           user_pref(\"dom.webdriver.enabled\", false);
           user_pref(\"use_automation_extension\", false);
           user_pref(\"general.useragent.override\", \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\");
-          
-          // 2. 必须禁用的隐私保护 (修复 AdBlock 检测)
-          // 关闭增强跟踪保护
           user_pref(\"privacy.trackingprotection.enabled\", false);
           user_pref(\"privacy.trackingprotection.pbmode.enabled\", false);
-          user_pref(\"privacy.trackingprotection.socialtracking.enabled\", false);
-          user_pref(\"privacy.trackingprotection.cryptomining.enabled\", false);
-          user_pref(\"privacy.trackingprotection.fingerprinting.enabled\", false);
-          
-          // 允许所有 Cookie (很多广告依赖第三方 Cookie)
-          user_pref(\"network.cookie.cookieBehavior\", 0); // 0 = Accept all
+          user_pref(\"network.cookie.cookieBehavior\", 0); 
           user_pref(\"network.cookie.thirdparty.sessionOnly\", false);
-          
-          // 3. 其他可能触发检测的设置
           user_pref(\"dom.popup_allowed_events\", \"change click dblclick mouseup notificationclick reset submit touchend\"); 
-          user_pref(\"dom.disable_open_during_load\", false); // 允许弹窗 (有些广告是弹窗)
-          
-          // 4. 保持 WebRTC 关闭 (防止 IP 泄露，如果广告一定需要 WebRTC 才能加载，这里可能需要改回 true)
+          user_pref(\"dom.disable_open_during_load\", false);
           user_pref(\"media.peerconnection.enabled\", false);
+          // 设置默认下载目录为 Downloads
+          user_pref(\"browser.download.folderList\", 2);
+          user_pref(\"browser.download.dir\", \"/home/appuser/Downloads\");
+          user_pref(\"browser.download.useDownloadDir\", true);
           EOF"
 
-      # 3. 启动桌面
-      - name: Start Desktop (As User)
+      # 3. 启动 XFCE 桌面
+      - name: Start XFCE Desktop
         run: |
           service dbus start || true
           
@@ -95,25 +106,40 @@ jobs:
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          Xvfb :99 -screen 0 1280x800x24 &
+          
+          # 启动 Xvfb (分辨率调高到 1440x900)
+          Xvfb :99 -screen 0 1440x900x24 &
           sleep 2
-          fluxbox &
-          x11vnc -display :99 -forever -passwd secret -bg -noxdamage
+          
+          # === 核心修改：启动 XFCE4 而不是 Fluxbox ===
+          # 禁用锁屏和电源管理，防止 VNC 黑屏
+          export XFCE_PANEL_MIGRATE_DEFAULT=true
+          startxfce4 &
+          
+          # 启动 VNC 服务器
+          x11vnc -display :99 -forever -bg -noxdamage
+          
+          # 启动 noVNC 代理
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
-          sleep 3
+          
+          # 等待桌面加载
+          sleep 5
+          
+          # 移除可能的锁屏/屏保设置 (防止长时间运行黑屏)
+          su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
       # 4. 启动 Firefox
-      - name: Launch Firefox & Tunnel
+      - name: Launch Firefox & Cloudflare Tunnel
         run: |
           cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          # 替换成你的目标网址
+          # 启动 Firefox
           nohup firefox --no-remote --new-instance "https://decrypt.day/app/id1489932710" > /home/appuser/firefox.log 2>&1 &
           EOF
           
@@ -123,70 +149,73 @@ jobs:
           echo "Firefox launching..."
           sleep 5
           
+          # 使用 Cloudflare Tunnel 暴露 6080 端口
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          sleep 10
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo $TUNNEL_URL
+          if [ $TUNNEL_URL ]; then
+            echo "Pass"
+          fi
+          sleep 3
           
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          echo $TUNNEL_URL
+          if [ $TUNNEL_URL ]; then
+            echo "Pass"
+          fi
+          sleep 3
+          
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          if [ $TUNNEL_URL ]; then
+            echo "Pass"
+          fi
+          echo $TUNNEL_URL
+          TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+          
           
           echo "=========================================================="
-          echo "🦊 Firefox (Ad-Friendly Mode) 已启动"
-          echo "🔗 VNC 链接: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "🖥️  XFCE Desktop Ready!"
+          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
+          echo "    (VNC 界面会有任务栏和文件管理器，操作更方便)"
           echo "=========================================================="
-          
-          # tail -f /home/appuser/firefox.log
-    
-      # 5. 核心步骤：监控下载并校验
+
+      # 5. 监控下载并校验 (保持原有逻辑)
       - name: Monitor Download (Wait for IPA)
+        timeout-minutes: 30 # 设置超时防止卡死
         run: |
           TARGET_DIR="/home/appuser/Downloads"
           MAX_SIZE_MB=100
           
-          echo "Starting monitoring loop for *.ipa in $TARGET_DIR"
+          echo "Starting monitoring loop in $TARGET_DIR"
           
           while true; do
-            # 查找 ipa 文件 (不包含 .part 临时文件)
             FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
             
             if [ -n "$FILE" ]; then
               BASENAME=$(basename "$FILE")
               
-              # 1. 检查是否还在下载 (Firefox 通常会生成 .part)
               if [ -f "${FILE}.part" ] || [ -f "${FILE}.partjs" ]; then
-                 echo "⏳ File $BASENAME is still downloading..."
+                 echo "⏳ Downloading: $BASENAME..."
               else
-                 # 2. 检查大小
                  SIZE_MB=$(du -m "$FILE" | cut -f1)
-                 
                  if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
-                   echo "⚠️ Found $BASENAME but size ($SIZE_MB MB) is too small (> $MAX_SIZE_MB MB). Waiting for correct file..."
+                   echo "⚠️ Found $BASENAME ($SIZE_MB MB), waiting for full file..."
                  else
-                   echo "✅ Found candidate: $BASENAME ($SIZE_MB MB)"
-                   
-                   # 3. 检查完整性 (使用 zip -T)
-                   # echo "🔍 Verifying integrity..."
-                   # if zip -T "$FILE" > /dev/null 2>&1; then
-                   #  echo "🎉 Integrity Check PASSED!"
-                   #  echo "FILE_PATH=$FILE" >> $GITHUB_ENV
-                   #  break
-                   #else
+                   echo "✅ Success: $BASENAME ($SIZE_MB MB)"
                    break
-                   #  echo "❌ Integrity Check FAILED. The file might be incomplete or corrupted. Waiting..."
-                   #fi
                  fi
               fi
             else
-               # 没有任何文件时，仅打印心跳
-               echo "Waiting for user to download IPA..."
+               echo "Waiting for download..."
             fi
-            
-            sleep 3
+            sleep 5
           done
           
-          echo "Download complete and verified. Stopping session."
+          echo "Download confirmed."
 
       # 6. 上传产物
       - name: Upload IPA Artifact
