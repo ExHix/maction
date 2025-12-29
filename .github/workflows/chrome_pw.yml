@@ -24,7 +24,7 @@ jobs:
           apt-get install -y wget curl git net-tools sudo vim unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
           
           # 安装 DrissionPage
-          pip3 install DrissionPage
+          pip3 install playwright
           
           # === 以下保持不变 ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
@@ -38,6 +38,8 @@ jobs:
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
+
+          playwright install-deps chromium
 
       # 2. 创建用户 & 配置 Chrome 反爬策略
       - name: Setup User & Chrome Preferences
@@ -118,33 +120,55 @@ jobs:
           # 防止黑屏
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 4. 启动 Chrome (带防检测参数)
+      # 4. 启动 Chrome (通过 Playwright 自动化) & Cloudflare Tunnel
       - name: Launch Chrome & Cloudflare Tunnel
         run: |
           cat <<EOF > /home/appuser/automate.py
-          from DrissionPage import ChromiumPage, ChromiumOptions
+          from playwright.sync_api import sync_playwright
+          import time
           import os
 
-          # 设置 Chrome 配置
-          co = ChromiumOptions()
-          co.set_argument('--no-sandbox')  # 容器环境必须
-          co.set_argument('--disable-gpu')
-          co.set_argument('--disable-blink-features=AutomationControlled')
-          co.set_browser_path('/usr/bin/google-chrome-stable')
-          co.set_user_data_path('/home/appuser/.config/google-chrome')
-          
-          # 启动并访问页面
-          page = ChromiumPage(co)
-          print("正在访问目标页面...")
-          page.get('https://decrypt.day/app/id1489932710')
-          
-          # 这里可以根据需要添加初步的自动化逻辑，例如：
-          # page.ele('text:Download').click()
-          
-          # 保持脚本运行，否则浏览器会关闭
-          import time
-          while True:
-              time.sleep(10)
+          # 定义配置路径（与之前 Shell 脚本保持一致）
+          USER_DATA_DIR = '/home/appuser/.config/google-chrome'
+          EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
+
+          with sync_playwright() as p:
+              print("🚀 正在启动 Playwright (System Chrome)...")
+              
+              # 使用 launch_persistent_context 以保持 UserDataDir 和配置
+              browser = p.chromium.launch_persistent_context(
+                  user_data_dir=USER_DATA_DIR,
+                  executable_path=EXECUTABLE_PATH,
+                  headless=False,  # 必须为 False 才能在 VNC 看到
+                  viewport=None,   # 禁用默认视口大小，跟随窗口
+                  args=[
+                      '--no-sandbox',
+                      '--disable-gpu',
+                      # === 核心反爬参数 ===
+                      '--disable-blink-features=AutomationControlled', 
+                      '--start-maximized',
+                      '--no-first-run',
+                      '--no-default-browser-check'
+                  ]
+              )
+              
+              # 获取默认页面或新建页面
+              page = browser.pages[0] if browser.pages else browser.new_page()
+              
+              # === 额外反爬措施：移除 navigator.webdriver 属性 ===
+              # DrissionPage 默认会自动处理这个，Playwright 需要手动注入
+              page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+              
+              print("🔗 正在访问目标页面...")
+              try:
+                  page.goto('https://decrypt.day/app/id1489932710', timeout=60000)
+                  print("✅ 页面加载完成")
+              except Exception as e:
+                  print(f"⚠️ 页面加载可能超时: {e}")
+
+              # 保持运行，等待 VNC 查看或后续操作
+              while True:
+                  time.sleep(10)
           EOF
 
           # 在后台运行自动化脚本
