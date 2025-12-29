@@ -202,6 +202,7 @@ jobs:
                       
                       # 注意：不要调用 browser.close()，否则会把 VNC 里的浏览器关掉
                       # 只需要断开 CDP 连接
+                      time.sleep(1000)
                       browser.disconnect()
                       print(">>> Playwright 脚本执行完毕，浏览器保持运行。")
                       
@@ -216,7 +217,8 @@ jobs:
           # 执行脚本 (注意：因为 Chrome 是 appuser 启动的，但端口是 localhost，root 也可以连)
           # 为了文件权限统一，建议用 su appuser 执行，或者 root 执行但注意写入路径
           # 这里直接运行 python3 即可
-          python3 poc_script.py
+          tail -n 20 /home/appuser/chrome.log
+          su appuser -c "python3 poc_script.py"
 
       # 7. 监控下载 (保持不变)
       - name: Monitor Download (Wait for IPA)
