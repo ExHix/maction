@@ -166,7 +166,8 @@ jobs:
               )
               
               # 获取默认页面或新建页面
-              page = browser.pages[0] if browser.pages else browser.new_page()
+              print("New pages...")
+              page = browser.new_page()
               
               # === 额外反爬措施：移除 navigator.webdriver 属性 ===
               # DrissionPage 默认会自动处理这个，Playwright 需要手动注入
@@ -196,14 +197,15 @@ jobs:
           export HOME=/home/appuser
           export LIBGL_ALWAYS_SOFTWARE=1
           
-          nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
+          #nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
+          python3 -u /home/appuser/get_ipa.py
           EOF
           
+    
           chmod +x /home/appuser/run_bot.sh
           su appuser -c "/home/appuser/run_bot.sh"
           
           echo "🤖 Script running..."
-
           tail -f /home/appuser/bot.log
 
       # 5. 监控下载 (逻辑不变)
