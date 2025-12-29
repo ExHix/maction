@@ -49,7 +49,7 @@ jobs:
           chmod -R 777 /opt/noVNC
 
           # === 新增：安装 Playwright ===
-          pip3 install playwright
+          pip3 install playwright playwright-stealth
 
       # 2. 创建用户 & 配置 Firefox 反爬策略 (保持不变，因为 Playwright 将加载此配置)
       - name: Setup User & Firefox Profile
@@ -118,38 +118,69 @@ jobs:
       # 4. 启动 Playwright 控制的 Firefox
       - name: Launch Firefox via Playwright & Tunnel
         run: |
-          # 编写 Python 自动化脚本
           cat <<EOF > /home/appuser/launch.py
           import time
           from playwright.sync_api import sync_playwright
+          from playwright_stealth import stealth_sync  # 引入伪装库
 
-          # 之前步骤创建的配置路径
           USER_DATA_DIR = "/home/appuser/.mozilla/firefox/stealth.default"
-          # 系统安装的 Firefox 路径
           EXECUTABLE_PATH = "/usr/bin/firefox"
           TARGET_URL = "https://decrypt.day/app/id1489932710"
+          
+          # 与 user.js 中保持一致的 UA
+          USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
 
           def run():
               with sync_playwright() as p:
-                  print("🚀 Starting Firefox with Playwright...")
-                  # 使用 launch_persistent_context 加载现有配置
+                  print("🚀 Starting Firefox with Stealth Mode...")
+                  
+                  # 启动参数优化
+                  args = [
+                      "--no-remote", 
+                      "--new-instance",
+                      "--disable-blink-features=AutomationControlled" # 尝试禁用自动化特征
+                  ]
+
                   browser = p.firefox.launch_persistent_context(
                       user_data_dir=USER_DATA_DIR,
                       executable_path=EXECUTABLE_PATH,
-                      headless=False, # 必须为 False 才能在 VNC 看到界面
-                      viewport={"width": 1440, "height": 900}, # 匹配 Xvfb 分辨率
-                      args=["--no-remote", "--new-instance"], # 原始参数
-                      ignore_default_args=["--enable-automation"] # 尝试隐藏自动化条
+                      headless=False,
+                      viewport={"width": 1440, "height": 900},
+                      user_agent=USER_AGENT,  # 显式覆盖 UA
+                      args=args,
+                      ignore_default_args=["--enable-automation"], # 隐藏自动化提示条
+                      java_script_enabled=True
                   )
                   
+                  # 获取页面（persistent_context 通常会默认打开一个空白页，如果没有则新建）
                   page = browser.pages[0] if browser.pages else browser.new_page()
+
+                  # === 核心伪装步骤 ===
                   
+                  # 1. 应用 playwright-stealth 插件
+                  stealth_sync(page)
+
+                  # 2. 手动注入脚本，强行抹除 webdriver 属性
+                  # 这段 JS 会在网页加载任何代码之前运行
+                  page.add_init_script("""
+                      Object.defineProperty(navigator, 'webdriver', {
+                          get: () => undefined
+                      });
+                  """)
+
                   print(f"🌍 Navigating to {TARGET_URL}")
-                  page.goto(TARGET_URL)
                   
-                  # 保持脚本运行，充当守护进程，直到下载任务完成
-                  # 在这里可以逐步添加自动化点击逻辑
-                  # 目前只是保持浏览器打开供人工操作
+                  # 访问目标网站
+                  try:
+                      page.goto(TARGET_URL, timeout=60000, wait_until="domcontentloaded")
+                  except Exception as e:
+                      print(f"⚠️ Page load warning: {e}")
+
+                  # 截图确认是否突破
+                  page.screenshot(path="/home/appuser/Downloads/debug_screenshot.png")
+                  print("📸 Debug screenshot saved to Downloads/")
+
+                  # 保持运行，等待人工/后续逻辑
                   while True:
                       time.sleep(60)
 
@@ -178,7 +209,11 @@ jobs:
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          sleep 10
+          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1
+          sleep 3
+          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1
+          sleep 3
+          grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1
           TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
           
           echo "=========================================================="
