@@ -124,8 +124,8 @@ jobs:
           export DISPLAY=:99
           export HOME=/home/appuser
           
-          # === 🔍 核心修改：增加 --remote-debugging-port=9222 ===
-          # 这允许 Playwright 通过 CDP 协议连接到这个已经启动的浏览器实例
+          # === 修正点 1: 增加 --remote-allow-origins=* ===
+          # 新版 Chrome (v110+) 加强了安全性，WebSocket 连接必须显式允许来源
           
           nohup google-chrome-stable \\
             --no-first-run \\
@@ -135,6 +135,7 @@ jobs:
             --password-store=basic \\
             --start-maximized \\
             --remote-debugging-port=9222 \\
+            --remote-allow-origins=* \\
             --user-data-dir=/home/appuser/.config/google-chrome \\
             "https://decrypt.day/app/id1489932710" > /home/appuser/chrome.log 2>&1 &
           EOF
@@ -142,8 +143,26 @@ jobs:
           chmod +x /home/appuser/run_chrome.sh
           su appuser -c "/home/appuser/run_chrome.sh"
           
-          echo "Chrome launching..."
-          sleep 10 # 等待 Chrome 完全启动并监听端口
+          echo "Chrome launched command sent."
+
+          # === 修正点 2: 主动等待端口开启 ===
+          echo "Waiting for Chrome Debugging Port (9222) to open..."
+          for i in $(seq 1 30); do
+            # 使用 curl 测试接口是否响应 (比 nc 更通用)
+            if curl -s http://127.0.0.1:9222/json/version > /dev/null; then
+              echo "✅ Chrome Debugging Port is READY!"
+              break
+            fi
+            echo "Waiting for port 9222... ($i/30)"
+            sleep 1
+            
+            # 如果等了 5 秒还没好，看一眼日志有没有报错
+            if [ "$i" -eq 5 ]; then
+               echo "--- Chrome Log Preview (Early Check) ---"
+               cat /home/appuser/chrome.log || true
+               echo "--------------------------------------"
+            fi
+          done
           
           # Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
@@ -168,56 +187,59 @@ jobs:
       # 6. 🔍 新增步骤：Playwright CDP 连接验证
       - name: Run Playwright PoC Script
         run: |
-          # 创建 Python 脚本
           cat <<EOF > poc_script.py
           from playwright.sync_api import sync_playwright
           import time
+          import sys
 
           def run():
+              print(">>> Python Script Start")
               try:
-                  print(">>> 正在尝试连接本地 Chrome (Port 9222)...")
                   with sync_playwright() as p:
-                      # 1. 连接到已存在的浏览器 (不启动新实例)
-                      browser = p.chromium.connect_over_cdp("http://localhost:9222")
+                      # === 修正点 3: 强制使用 127.0.0.1 避免 IPv6 ::1 错误 ===
+                      print(">>> Connecting to browser at http://127.0.0.1:9222 ...")
+                      browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
                       
-                      # 2. 获取当前的上下文和页面
                       context = browser.contexts[0]
-                      # 这里的 page 就是刚才脚本启动时打开的 decrypt.day 页面
-                      page = context.pages[0] 
+                      if not context.pages:
+                          print(">>> No pages found, creating one...")
+                          page = context.new_page()
+                      else:
+                          page = context.pages[0]
                       
-                      print(f">>> 连接成功! 当前页面标题: {page.title()}")
+                      print(f">>> Success! Connected to page: {page.title()}")
                       
-                      # 3. 可以在这里做一些自动化的操作验证
-                      # 例如：等待某个元素出现，或者截图
-                      page.wait_for_load_state("domcontentloaded")
+                      # 简单的验证动作
+                      page.wait_for_timeout(2000)
+                      page.screenshot(path="/home/appuser/Downloads/poc_proof.png")
+                      print(">>> Screenshot saved.")
                       
-                      # 截图验证 (保存到下载目录方便查看 artifact)
-                      screenshot_path = "/home/appuser/Downloads/poc_proof.png"
-                      page.screenshot(path=screenshot_path)
-                      print(f">>> 截图已保存至: {screenshot_path}")
-
-                      # 4. 获取一些反爬检测所需的指纹信息来验证是否生效
-                      webdriver_flag = page.evaluate("navigator.webdriver")
-                      print(f">>> navigator.webdriver 状态: {webdriver_flag}")
-                      
-                      # 注意：不要调用 browser.close()，否则会把 VNC 里的浏览器关掉
-                      # 只需要断开 CDP 连接
-                      time.sleep(1000)
                       browser.disconnect()
-                      print(">>> Playwright 脚本执行完毕，浏览器保持运行。")
                       
               except Exception as e:
-                  print(f"!!! 脚本执行出错: {e}")
-                  exit(1)
+                  print(f"!!! Python Error: {e}")
+                  sys.exit(1)
 
           if __name__ == "__main__":
               run()
           EOF
 
+          tail -n 20 /home/appuser/chrome.log
+
+          # 先检查一下端口还在不在
+          if curl -s http://127.0.0.1:9222/json/version > /dev/null; then
+              python3 poc_script.py
+          else
+              echo "❌ Port 9222 is closed! Chrome crashed?"
+              echo "--- FINAL CHROME LOG ---"
+              cat /home/appuser/chrome.log
+              exit 1
+          fi
+
           # 执行脚本 (注意：因为 Chrome 是 appuser 启动的，但端口是 localhost，root 也可以连)
           # 为了文件权限统一，建议用 su appuser 执行，或者 root 执行但注意写入路径
           # 这里直接运行 python3 即可
-          tail -n 20 /home/appuser/chrome.log
+          
           su appuser -c "python3 poc_script.py"
 
       # 7. 监控下载 (保持不变)
