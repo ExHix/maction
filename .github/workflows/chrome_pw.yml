@@ -1,52 +1,45 @@
-name: System Chrome Playwright Bot
+name: Chrome XFCE Desktop VNC
 on: 
   workflow_dispatch:
 
 jobs:
-  playwright-bot:
+  chrome-user:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
+      # 增加 --shm-size 防止 Chrome 崩溃 (Chrome 对内存共享要求很高)
       options: --privileged --shm-size=2gb
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. 安装系统环境、Chrome 和 Python
-      - name: Install System & Dependencies
+      # 1. 安装基础环境 + XFCE4 + Chrome
+      - name: Install System & Desktop (XFCE4) & Chrome
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装基础工具
-          apt-get install -y wget curl git net-tools sudo vim unzip xz-utils \
-                             python3 python3-pip xvfb x11vnc \
-                             libgbm1 libnss3 libasound2 libatk-bridge2.0-0 libgtk-3-0
+          # 安装基础工具 (添加了 python3-pip)
+          apt-get install -y wget curl git net-tools sudo vim unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
           
-          # === 核心修改：安装 Google Chrome ===
+          # 安装 DrissionPage
+          pip3 install DrissionPage
+          
+          # === 以下保持不变 ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          # 使用 apt install ./file.deb 可以自动解决依赖
           apt-get install -y ./google-chrome-stable_current_amd64.deb
           rm google-chrome-stable_current_amd64.deb
-          
-          # 安装字体 (防止乱码)
           apt-get install -y fonts-liberation fonts-noto-color-emoji fontconfig ttf-mscorefonts-installer
-          
-          # === 安装 XFCE4 桌面环境 ===
           apt-get install -y xvfb x11vnc python3 pulseaudio dbus-x11 xfce4 xfce4-goodies xfce4-terminal
-          
-          # 同意微软字体协议
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
-          
-          # 安装 noVNC
           git clone https://github.com/novnc/noVNC.git /opt/noVNC
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
-          
-        # 2. 创建用户 & 配置 Chrome 反爬策略
+
+      # 2. 创建用户 & 配置 Chrome 反爬策略
       - name: Setup User & Chrome Preferences
         run: |
           useradd -m -s /bin/bash appuser
@@ -125,122 +118,99 @@ jobs:
           # 防止黑屏
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 3. 编写 Python 自动化脚本 (指定 executable_path)
-      - name: Create Python Automation Script
+      # 4. 启动 Chrome (带防检测参数)
+      - name: Launch Chrome & Cloudflare Tunnel
         run: |
-          pip3 install playwright tf-playwright-stealth
-
-          cat <<EOF > /home/appuser/bot.py
-          import time
+          cat <<EOF > /home/appuser/automate.py
+          from DrissionPage import ChromiumPage, ChromiumOptions
           import os
-          from playwright.sync_api import sync_playwright
-          from playwright_stealth import stealth_sync
 
-          TARGET_URL = "https://decrypt.day/app/id1489932710"
-          DOWNLOAD_DIR = "/home/appuser/Downloads"
-
-          def run():
-              with sync_playwright() as p:
-                  print("🚀 Launching System Google Chrome...")
-                  
-                  # === 核心修改：指定 executable_path ===
-                  browser = p.chromium.launch(
-                      # 强制使用系统安装的 Chrome 路径
-                      executable_path="/usr/bin/google-chrome", 
-                      
-                      headless=False, # 必须为 False 才能配合 Xvfb 绕过检测
-                      
-                      # 防检测参数
-                      args=[
-                          "--disable-blink-features=AutomationControlled",
-                          "--start-maximized",
-                          "--no-sandbox",
-                          "--disable-infobars",
-                          "--disable-dev-shm-usage" # 容器环境推荐加上这个
-                      ]
-                  )
-                  
-                  context = browser.new_context(
-                      viewport={"width": 1440, "height": 900},
-                      user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                      accept_downloads=True
-                  )
-                  
-                  page = context.new_page()
-                  
-                  # 应用 Stealth (掩盖指纹)
-                  stealth_sync(page)
-
-                  print(f"🌍 Navigating to {TARGET_URL}...")
-                  
-                  try:
-                      page.goto(TARGET_URL, timeout=90000)
-                      
-                      # 截图调试 1
-                      page.screenshot(path="/home/appuser/Downloads/1_loaded.png")
-                      
-                      # === 你的业务逻辑 ===
-                      # 这里仅仅是等待示例，你需要根据实际页面补充点击逻辑
-                      # 例如: page.get_by_text("Download").click()
-                      
-                      # 示例：检测标题
-                      print(f"Page Title: {page.title()}")
-                      
-                      # 模拟鼠标移动
-                      page.mouse.move(200, 200)
-                      time.sleep(1)
-                      page.mouse.move(500, 400)
-                      
-                      # 如果页面有自动下载，或者你点击了下载按钮，等待下载完成
-                      # 这里设置一个长时间等待方便你在 VNC 里观察
-                      time.sleep(1000)
-                      
-                      page.screenshot(path="/home/appuser/Downloads/2_finished.png")
-                      
-                  except Exception as e:
-                      print(f"❌ Error: {e}")
-                      page.screenshot(path="/home/appuser/Downloads/error.png")
-                  finally:
-                      browser.close()
-
-          if __name__ == "__main__":
-              run()
+          # 设置 Chrome 配置
+          co = ChromiumOptions()
+          co.set_argument('--no-sandbox')  # 容器环境必须
+          co.set_argument('--disable-gpu')
+          co.set_argument('--disable-blink-features=AutomationControlled')
+          co.set_browser_path('/usr/bin/google-chrome-stable')
+          co.set_user_data_path('/home/appuser/.config/google-chrome')
+          
+          # 启动并访问页面
+          page = ChromiumPage(co)
+          print("正在访问目标页面...")
+          page.get('https://decrypt.day/app/id1489932710')
+          
+          # 这里可以根据需要添加初步的自动化逻辑，例如：
+          # page.ele('text:Download').click()
+          
+          # 保持脚本运行，否则浏览器会关闭
+          import time
+          while True:
+              time.sleep(10)
           EOF
 
-      # 4. 建立 VNC 连接 (可选)
-      - name: Setup Cloudflare Tunnel (VNC)
-        run: |
+          # 在后台运行自动化脚本
+          export DISPLAY=:99
+          su appuser -c "nohup python3 /home/appuser/automate.py > /home/appuser/chrome.log 2>&1 &"
+          
+          # Cloudflare Tunnel (保持不变，以便你依然可以连进去观察)
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
           
           echo "Waiting for Tunnel..."
-          for i in $(seq 1 10); do
-            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
-            if [ -n "$TUNNEL_URL" ]; then
-                echo "Found Tunnel URL: $TUNNEL_URL"
+          for i in \$(seq 1 10); do
+            TUNNEL_URL=\$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" tunnel.log | head -1)
+            if [ -n "\$TUNNEL_URL" ]; then
+                echo "=========================================================="
+                echo "🖥️  Automation Started!"
+                echo "🔗  Watch Progress via VNC: \$TUNNEL_URL/vnc.html?autoconnect=true"
+                echo "=========================================================="
                 break
             fi
             sleep 1
           done
-          
-          echo "=========================================================="
-          echo "🖥️  XFCE Desktop Ready!"
-          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
-          echo "=========================================================="
 
-      # 5. 运行 Python 脚本
-      - name: Run Playwright Bot
+      # 5. 监控下载 (逻辑不变)
+      - name: Monitor Download (Wait for IPA)
+        timeout-minutes: 30
         run: |
-          export DISPLAY=:99
-          # 无需运行 playwright install，直接跑脚本
-          su appuser -c "python3 /home/appuser/bot.py > /home/appuser/chrome.log 2>&1 &" 
-          tail -f /home/appuser/chrome.log
+          TARGET_DIR="/home/appuser/Downloads"
+          MAX_SIZE_MB=100
+          
+          echo "Starting monitoring loop in $TARGET_DIR"
+          
+          while true; do
+            # Chrome 下载临时文件通常是 .crdownload
+            FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
+            
+            if [ -n "$FILE" ]; then
+              BASENAME=$(basename "$FILE")
+              
+              # 检查 Chrome 的临时文件后缀
+              if [ -f "${FILE}.crdownload" ]; then
+                 echo "⏳ Downloading (crdownload present): $BASENAME..."
+              else
+                 # 双重检查文件大小变化，确保下载完成
+                 SIZE_MB=$(du -m "$FILE" | cut -f1)
+                 
+                 # 简单的防误判：如果文件太小，可能还没开始写真正的数据
+                 if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
+                   echo "⚠️ Found $BASENAME ($SIZE_MB MB), waiting for full file..."
+                 else
+                   echo "✅ Success: $BASENAME ($SIZE_MB MB)"
+                   break
+                 fi
+              fi
+            else
+               echo "Waiting for download..."
+            fi
+            sleep 5
+          done
+          
+          echo "Download confirmed."
 
-      # 6. 上传截图和下载文件
-      - name: Upload Artifacts
-        if: always()
+      # 6. 上传产物
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bot-results
-          path: /home/appuser/Downloads/
+          name: decrypted-app
+          path: /home/appuser/Downloads/*.ipa
