@@ -7,7 +7,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-
       options: --privileged --shm-size=2gb
     
     steps:
@@ -120,9 +119,11 @@ jobs:
           sleep 5
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 4. 启动 Playwright 控制的 Firefox
-      - name: Launch Firefox via Playwright & Tunnel
+      - name: Launch Firefox & Tunnel
         run: |
+          pip3 install playwright playwright-stealth
+          playwright install-deps firefox
+
           cat <<EOF > /home/appuser/run_firefox.sh
           #!/bin/bash
           export DISPLAY=:99
