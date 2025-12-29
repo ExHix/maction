@@ -120,7 +120,6 @@ jobs:
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
       - name: Launch Firefox & Tunnel
-        shell: bash  # <--- 强制使用 Bash，避免 sh 报错
         run: |
           # 1. 安装 Playwright Python 库
           pip3 install playwright playwright-stealth
