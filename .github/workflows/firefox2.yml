@@ -117,7 +117,7 @@ jobs:
           startxfce4 &
           
           # 启动 VNC 服务器
-          x11vnc -display :99 -forever -passwd secret -bg -noxdamage
+          x11vnc -display :99 -forever -bg -noxdamage
           
           # 启动 noVNC 代理
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
@@ -161,7 +161,7 @@ jobs:
           
           echo "=========================================================="
           echo "🖥️  XFCE Desktop Ready!"
-          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true&password=secret"
+          echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "    (VNC 界面会有任务栏和文件管理器，操作更方便)"
           echo "=========================================================="
 
