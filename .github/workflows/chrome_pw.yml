@@ -30,7 +30,7 @@ jobs:
           rm google-chrome-stable_current_amd64.deb
           
           # === 仅安装 Python 库，不运行 playwright install ===
-          pip3 install playwright playwright-stealth
+          pip3 install playwright tf-playwright-stealth
           
           # 安装 XFCE4 (VNC桌面)
           apt-get install -y dbus-x11 xfce4 xfce4-goodies xfce4-terminal
