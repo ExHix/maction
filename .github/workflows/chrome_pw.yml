@@ -135,32 +135,40 @@ jobs:
       
       - name: Launch Chrome
         run: |
-          
-
+        
           cat <<'EOF' > /home/appuser/get_ipa.py
           from playwright.sync_api import sync_playwright
           from playwright_stealth import stealth_sync
+          import playwright.sync_api
           import time
           import os, json
 
-          # 定义配置路径（与之前 Shell 脚本保持一致）
+          # \u5b9a\u4e49\u914d\u7f6e\u8def\u5f84\uff08\u4e0e\u4e4b\u524d Shell \u811a\u672c\u4fdd\u6301\u4e00\u81f4\uff09
           USER_DATA_DIR = '/home/appuser/.config/google-chrome'
           EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
           base_url = "https://decrypt.day/app/id1489932710"
-          
-          with sync_playwright() as p:
-              print("🚀 正在启动 Playwright (System Chrome)...")
+
+          ENABLE_DEBUG_PAUSE = False
+          def debug_pause(msg: str):
+              global ENABLE_DEBUG_PAUSE
+              if not ENABLE_DEBUG_PAUSE:
+                  return
               
-              # 使用 launch_persistent_context 以保持 UserDataDir 和配置
+              input(f"[DEBUG PAUSE] {msg}")
+
+          with sync_playwright() as p:
+              print("\U0001f680 \u6b63\u5728\u542f\u52a8 Playwright (System Chrome)...")
+              
+              # \u4f7f\u7528 launch_persistent_context \u4ee5\u4fdd\u6301 UserDataDir \u548c\u914d\u7f6e
               browser = p.chromium.launch(
                   #user_data_dir=USER_DATA_DIR,
                   executable_path=EXECUTABLE_PATH,
-                  headless=False,  # 必须为 False 才能在 VNC 看到
-                  #viewport=None,   # 禁用默认视口大小，跟随窗口
+                  headless=False,  # \u5fc5\u987b\u4e3a False \u624d\u80fd\u5728 VNC \u770b\u5230
+                  #viewport=None,   # \u7981\u7528\u9ed8\u8ba4\u89c6\u53e3\u5927\u5c0f\uff0c\u8ddf\u968f\u7a97\u53e3
                   args=[
                       '--no-sandbox',
                       '--disable-gpu',
-                      # === 核心反爬参数 ===
+                      # === \u6838\u5fc3\u53cd\u722c\u53c2\u6570 ===
                       # '--disable-blink-features=AutomationControlled', 
                       # '--start-maximized',
                       # '--no-first-run',
@@ -170,103 +178,143 @@ jobs:
                   ignore_default_args=["--enable-automation"],
               )
               
-              # 获取默认页面或新建页面
+              # \u83b7\u53d6\u9ed8\u8ba4\u9875\u9762\u6216\u65b0\u5efa\u9875\u9762
               # print("New pages...")
               # page = browser.new_page()
               
-              # # === 额外反爬措施：移除 navigator.webdriver 属性 ===
-              # # DrissionPage 默认会自动处理这个，Playwright 需要手动注入
+              # # === \u989d\u5916\u53cd\u722c\u63aa\u65bd\uff1a\u79fb\u9664 navigator.webdriver \u5c5e\u6027 ===
+              # # DrissionPage \u9ed8\u8ba4\u4f1a\u81ea\u52a8\u5904\u7406\u8fd9\u4e2a\uff0cPlaywright \u9700\u8981\u624b\u52a8\u6ce8\u5165
               # page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
               
-              # print("🔗 正在访问目标页面...")
+              # print("\U0001f517 \u6b63\u5728\u8bbf\u95ee\u76ee\u6807\u9875\u9762...")
               # try:
               #     page.goto('https://decrypt.day/app/id1489932710', timeout=60000)
-              #     print("✅ 页面加载完成")
+              #     print("\u2705 \u9875\u9762\u52a0\u8f7d\u5b8c\u6210")
               # except Exception as e:
-              #     print(f"⚠️ 页面加载可能超时: {e}")
+              #     print(f"\u26a0\ufe0f \u9875\u9762\u52a0\u8f7d\u53ef\u80fd\u8d85\u65f6: {e}")
 
-              # # 保持运行，等待 VNC 查看或后续操作
+              # # \u4fdd\u6301\u8fd0\u884c\uff0c\u7b49\u5f85 VNC \u67e5\u770b\u6216\u540e\u7eed\u64cd\u4f5c
               # while True:
               #     time.sleep(10)
+              context = browser.new_context(
+                      #user_agent=user_agent,
+                      #viewport={"width": 1280, "height": 800},
+                      #locale="zh-CN",
+                      #timezone_id="Asia/Shanghai"
+                  )
+              context.add_init_script("""
+                  Object.defineProperty(navigator, 'webdriver', {
+                      get: () => undefined
+                  });
+              """)
 
-              context = browser.new_context()
-              
-              # 再次确保 webdriver 属性被抹除
-              context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-
+              # Open info page
               page = context.new_page()
-              stealth_sync(page)
-              print(f"[Script] 打开页面: {base_url}")
+              page.goto(base_url, timeout=60000)
+
+              page.wait_for_load_state("domcontentloaded")
               
+              if "Just a moment" in page.title() or "Cloudflare" in page.title() or "cf" in page.url:
+                  print("\n" + "="*50)
+                  print("[!] ??? Cloudflare ?????")
+                  print("[!] ????? Firefox ??????????")
+                  print("[!] ????????????????????????...")
+                  print("="*50 + "\n")
+                  # input(">>> ???????????????...")
+              else:
+                  print("[-] ?????????????...")
+
+              page.wait_for_load_state("domcontentloaded")
+
+              
+              debug_pause(">>> ?????? POST ??...")
+
+              # fetch download link via JS fetch
+              result = page.evaluate("""
+                  async () => {
+                      const formData = new FormData();
+                      formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
+
+                      const resp = await fetch('$BASE_PAGE_URL$?/files', {
+                          method: 'POST',
+                          body: formData,
+                      });
+                      return await resp.text();
+                  }
+              """.replace("$BASE_PAGE_URL$", base_url))
+              # print(type(result))
+              # print(result)
+              assert isinstance(result, str), f"Invalid response type: {type(result)}"
+
               try:
-                  page.goto(base_url, timeout=90000)
-                  page.wait_for_load_state("domcontentloaded")
-              except Exception as e:
-                  print(f"[Script] 警告: 页面加载 {e}")
-
-              # Cloudflare 检测
-              if "Just a moment" in page.title() or "Cloudflare" in page.title():
-                  print("\n" + "!"*30)
-                  print("[!] Cloudflare 拦截！请进 VNC 手动验证！")
-                  print("!"*30 + "\n")
-                  time.sleep(30)
-
-              print("[Script] 解析下载逻辑...")
+                  download_page_req = json.loads(result)
+                  assert download_page_req.get("type") == "success", f"Failed when request download path: {download_page_req}"
+                  dl_page_details: list = json.loads(download_page_req.get("data"))
+              except json.JSONDecodeError as e:
+                  raise ValueError(f"Invalid JSON: {e}\nRequest result: {result}")
+              
+              free_dl_path = ""
               try:
-                  # 模拟前端请求获取下载配置
-                  js_code = """
-                      async () => {
-                          const formData = new FormData();
-                          formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
-                          const resp = await fetch('""" + base_url + """?/files', {method: 'POST', body: formData});
-                          return await resp.text();
-                      }
-                  """
-                  result = page.evaluate(js_code)
-                  data_json = json.loads(result)
-                  dl_list = json.loads(data_json.get("data", "[]"))
-                  
-                  target_path = ""
-                  for item in dl_list:
-                      if isinstance(item, str) and len(item) == 21:
-                          target_path = item
-                          break
-                  
-                  if not target_path and "gofile.io" in dl_list:
-                        idx = dl_list.index("gofile.io")
-                        target_path = dl_list[idx-3]
+                  free_dl_path = dl_page_details[dl_page_details.index("gofile.io") - 3]
+              except IndexError:
+                  # fallback
+                  print("[!] Fallback: scanning for valid download path...")
+                  for e in dl_page_details:
+                      if not (isinstance(e, str) and len(e) == 21):
+                          continue
+                      free_dl_path = e
+                      break
+              
+              # goto download page
+              if not free_dl_path:
+                  raise ValueError(f"Cannot get download page path. Request: {download_page_req}")
 
-                  if not target_path:
-                      print("[Script] 未找到路径，请手动操作。")
-                  else:
-                      dl_url = f"{base_url}/dl/{target_path}"
-                      print(f"[Script] 下载页: {dl_url}")
-                      dl_page = context.new_page()
-                      stealth_sync(dl_page)
-                      dl_page.goto(dl_url, referer=base_url)
-                      
-                      print("[Script] 点击 'Get download link'...")
-                      dl_page.locator("button.btn-download").filter(has_text="Get download link").click()
-                      time.sleep(3)
-                      
-                      print("[Script] 点击 'Download'...")
-                      with dl_page.expect_download(timeout=60000) as download_info:
-                          dl_page.locator("button.btn-download").filter(has_text="Download").click()
-                      
-                      download = download_info.value
-                      print(f"[Script] 下载开始: {download.suggested_filename}")
-                      final_path = os.path.join("/home/appuser/Downloads", download.suggested_filename)
-                      download.save_as(final_path)
-                      print(f"[Script] ✅ 保存成功: {final_path}")
+              download_page_url = f"{base_url}/dl/{free_dl_path}"
+              print(f"[-] Download Page: {download_page_url}")
 
-              except Exception as e:
-                  print(f"[Script] 流程错误: {e}")
-                  import traceback
-                  traceback.print_exc()
+              dl_page = context.new_page()
+              dl_page.goto(download_page_url, referer=base_url)
 
-              print("[Script] 浏览器保持开启，等待 Action 结束...")
+              btn = dl_page.locator("button.btn-download").filter(has_text="Get download link")
+              btn.click()
+              # btn.scroll_into_view_if_needed()
+              # box = btn.bounding_box()
+              # assert box is not None, "No box found"
+
+              # center_x = box["x"] + box["width"] / 2
+              # center_y = box["y"] + box["height"] / 2
+              # dl_page.mouse.move(center_x, center_y)
+              # dl_page.mouse.click(center_x, center_y)
+
+              print("??????...")
+              time.sleep(5)
+
+              # click button
+              # def handle_response(response: playwright.sync_api.Response):
+              #     if "https://decrypt.day/" in response.url and response.request.method == "POST":
+              #         print(f"\n[?????]: {response.url}")
+              #         try:
+              #             # ??????????? JSON?
+              #             data = response.json()
+              #             print(f"[????]: {json.dumps(data, indent=2, ensure_ascii=False)}")
+              #         except Exception:
+              #             print("[???? JSON ??]")
+
+              # # ????
+              # dl_page.on("response", handle_response)
+              
+              time.sleep(5)
+
+              print("????...")
+              btn = dl_page.locator("button.btn-download")#.filter(has_text="Download")
+              btn.click()
+
+              debug_pause(">>> ?????????...")
+
+              print("[Script] \u6d4f\u89c8\u5668\u4fdd\u6301\u5f00\u542f\uff0c\u7b49\u5f85 Action \u7ed3\u675f...")
               while True:
                   time.sleep(10)
+
           EOF
 
           chown appuser:appuser /home/appuser/get_ipa.py
