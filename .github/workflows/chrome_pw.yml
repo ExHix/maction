@@ -55,13 +55,19 @@ jobs:
           useradd -m -s /bin/bash appuser
           echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           
+          # 创建目录
           su appuser -c "mkdir -p /home/appuser/Downloads"
           su appuser -c "mkdir -p /home/appuser/Desktop"
           
           # === Chrome 核心配置 ===
+          # 创建 Chrome 默认配置目录
           CONFIG_DIR="/home/appuser/.config/google-chrome/Default"
           su appuser -c "mkdir -p $CONFIG_DIR"
           
+          # 写入 Preferences 文件 (JSON格式)
+          # 1. 设置下载目录并禁止弹窗
+          # 2. 禁用凭证服务
+          # 3. 允许弹出窗口 (防止下载被拦截)
           su appuser -c "cat <<EOF > $CONFIG_DIR/Preferences
           {
             \"download\": {
@@ -129,13 +135,12 @@ jobs:
           
           nohup google-chrome-stable \\
             --no-first-run \\
+            --no-sandbox \\
             --no-default-browser-check \\
             --disable-infobars \\
             --disable-blink-features=AutomationControlled \\
             --password-store=basic \\
             --start-maximized \\
-            --remote-debugging-port=9222 \\
-            --remote-allow-origins=* \\
             --user-data-dir=/home/appuser/.config/google-chrome \\
             "https://decrypt.day/app/id1489932710" > /home/appuser/chrome.log 2>&1 &
           EOF
