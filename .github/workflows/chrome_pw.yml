@@ -123,9 +123,6 @@ jobs:
       # 4. 启动 Chrome (通过 Playwright 自动化) & Cloudflare Tunnel
       - name: Launch Chrome & Cloudflare Tunnel
         run: |
-          # 4. 启动 Chrome (通过 Playwright 自动化) & Cloudflare Tunnel
-      - name: Launch Chrome & Cloudflare Tunnel
-        run: |
           cat <<EOF > /home/appuser/automate.py
           from playwright.sync_api import sync_playwright
           import time
@@ -197,8 +194,6 @@ jobs:
           echo "🖥️  XFCE Desktop Ready!"
           echo "🔗  VNC Link: $TUNNEL_URL/vnc.html?autoconnect=true"
           echo "=========================================================="
-          
-          #tail -f /home/appuser/chrome.log
 
       # 5. 监控下载 (逻辑不变)
       - name: Monitor Download (Wait for IPA)
