@@ -40,25 +40,36 @@ jobs:
           echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           su appuser -c "mkdir -p /home/appuser/Downloads"
 
-      # 2. 启动 XFCE 桌面
-      - name: Start Virtual Desktop (Xvfb)
+      # 3. 启动 XFCE 桌面
+      - name: Start XFCE Desktop
         run: |
           service dbus start || true
           
           cat <<EOF > /home/appuser/run_desktop.sh
           #!/bin/bash
           export DISPLAY=:99
-          # 1440x900 分辨率
+          export HOME=/home/appuser
+          
+          # 启动 Xvfb (分辨率 1440x900)
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 2
+          
+          # 启动 XFCE4
+          export XFCE_PANEL_MIGRATE_DEFAULT=true
           startxfce4 &
+          
+          # 启动 VNC
           x11vnc -display :99 -forever -bg -noxdamage
+          
+          # 启动 noVNC
+          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
           su appuser -c "/home/appuser/run_desktop.sh"
           
-          # 防止锁屏
+          sleep 5
+          # 防止黑屏
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
       # 3. 编写 Python 自动化脚本 (指定 executable_path)
