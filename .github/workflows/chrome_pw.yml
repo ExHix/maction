@@ -36,6 +36,8 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
+          # 安装 DrissionPage
+          pip3 install playwright tf-playwright-stealth
           playwright install-deps chromium
 
       # 2. 创建用户 & 配置 Chrome 反爬策略
@@ -133,8 +135,7 @@ jobs:
       
       - name: Launch Chrome
         run: |
-          # 安装 DrissionPage
-          pip3 install playwright tf-playwright-stealth
+          
 
           cat <<'EOF' > /home/appuser/get_ipa.py
           from playwright.sync_api import sync_playwright
