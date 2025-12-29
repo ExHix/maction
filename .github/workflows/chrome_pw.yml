@@ -108,7 +108,7 @@ jobs:
                   print(f"🌍 Navigating to {TARGET_URL}...")
                   
                   try:
-                      page.goto(TARGET_URL, timeout=1900000)
+                      page.goto(TARGET_URL, timeout=90000)
                       
                       # 截图调试 1
                       page.screenshot(path="/home/appuser/Downloads/1_loaded.png")
@@ -168,7 +168,8 @@ jobs:
         run: |
           export DISPLAY=:99
           # 无需运行 playwright install，直接跑脚本
-          su appuser -c "python3 /home/appuser/bot.py"
+          su appuser -c "python3 /home/appuser/bot.py > /home/appuser/chrome.log 2>&1 &" 
+          tail -f chrome.log
 
       # 6. 上传截图和下载文件
       - name: Upload Artifacts
