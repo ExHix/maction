@@ -47,9 +47,7 @@ jobs:
           git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
-
-          # === 新增：安装 Playwright ===
-          pip3 install playwright playwright-stealth
+          
 
       # 2. 创建用户 & 配置 Firefox 反爬策略 (保持不变，因为 Playwright 将加载此配置)
       - name: Setup User & Firefox Profile
@@ -118,6 +116,8 @@ jobs:
       # 4. 启动 Playwright 控制的 Firefox
       - name: Launch Firefox via Playwright & Tunnel
         run: |
+          pip3 install playwright tf-playwright-stealth
+  
           cat <<EOF > /home/appuser/launch.py
           import time
           from playwright.sync_api import sync_playwright
