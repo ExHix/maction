@@ -31,31 +31,29 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: artifact
       - run: |
-          mkdir -p /home/runner/package
+          mkdir -p /tmp/package
+          mkdir -p /home/runner/release
+
           cd artifact
-          ls
-          pwd
-          echo "emmmm"
-          cp -r . /home/runner/package
-          ls /home/runner/package
+          cp -r . /tmp/package
+          ls /tmp/package
 
           APP_PACKAGE=$(find . -type f \( -name "*.ipa" -o -name "*.apk" \) | head -n 1)
           VERSION=$(echo $APP_PACKAGE | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
-          RELEASE_PACKAGE=$(readlink -m "/home/runner/package/artifact/$APP_PACKAGE")
+
+          cp $APP_PACKAGE /home/runner/release/
 
           echo "APP_PACKAGE=$APP_PACKAGE, VERSION=$VERSION"
           
           echo "APP_PACKAGE=$APP_PACKAGE" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "RELEASE_PACKAGE=$RELEASE_PACKAGE" >> $GITHUB_ENV
     
       - name: Setup
         env:
           APP_PACKAGE: ${{ env.APP_PACKAGE }}
           BINARY_NAME: ${{ inputs.binary_name }}
         run: |
-          cd /home/runner/package
-          ls
+          cd /tmp/package
 
           7z x $APP_PACKAGE -o./package
           BINARY_PATH=$(find ./package -name "$BINARY_NAME" -print -quit)
@@ -86,9 +84,6 @@ jobs:
           
           docker exec idap ./idat -B -L"/dev/stdout" ./picture_decoder | tee /home/runner/workspace/output.log
 
-          echo "Finished"
-          sudo chmod -R 777 /home/runner/workspace 
-
       - name: Clean up
         run: |
           # rm /home/runner/workspace/UnityFramework
@@ -96,11 +91,9 @@ jobs:
           # cp -r /home/runner/workspace /home/workspace
           # chmod -R 777 /home/workspace
           7z a /home/runner/analysis.zip /home/runner/workspace/.
-          ls /home/runner/package
-          
-          echo "Finished"
+          mv /home/runner/analysis.zip /home/runner/release/
 
-          ls /home/runner/workspace
+          ls /home/runner/release/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -114,8 +107,7 @@ jobs:
           name: Test
           tag_name: v6.2.0_ios
           files: |
-            ${{ env.RELEASE_PACKAGE }}
-            /home/runner/analysis.zip
+            /home/runner/release/*
           # generate_release_notes: true
           # draft: false # 是否设为草稿
           # prerelease: false # 是否设为预发布
