@@ -140,7 +140,7 @@ jobs:
 
               print("[-] Open app info page")
               page = context.new_page()
-              stealth_sync(page)
+              #stealth_sync(page)
               page.goto(base_url, timeout=60000)
 
               page.wait_for_load_state("domcontentloaded")
@@ -205,7 +205,7 @@ jobs:
               print(f"[-] Download Page: {download_page_url}")
 
               dl_page = context.new_page()
-              stealth_sync(dl_page)
+              #stealth_sync(dl_page)
               dl_page.goto(download_page_url, referer=base_url)
 
               btn = dl_page.locator("button.btn-download").filter(has_text="Get download link")
