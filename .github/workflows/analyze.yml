@@ -53,7 +53,7 @@ jobs:
           BINARY_PATH=$(find ./package -name "$BINARY_NAME" -print -quit)
           
           echo "Target binary: $BINARY_PATH"
-          mkdir -r /home/runner/workspace
+          mkdir -p /home/runner/workspace
           cp $BINARY_PATH /home/runner/workspace/
 
           
