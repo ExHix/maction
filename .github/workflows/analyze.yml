@@ -33,7 +33,11 @@ jobs:
       - run: |
           mkdir -p /tmp/package
           cd artifact
+          ls
+          pwd
+          echo "emmmm"
           cp -r . /tmp/package
+          ls /tmp/package
 
           APP_PACKAGE=$(find . -type f \( -name "*.ipa" -o -name "*.apk" \) | head -n 1)
           VERSION=$(echo $APP_PACKAGE | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
