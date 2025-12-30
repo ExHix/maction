@@ -31,7 +31,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}
-          path: /root/artifact
+          path: /home/artifact
       - run: |
           ls -R
           APP_PACKAGE=$(find . -type f \( -name "*.ipa" -o -name "*.apk" \) | head -n 1)
@@ -43,7 +43,7 @@ jobs:
           BINARY_NAME: ${{ inputs.binary_name }}
         run: |
           mkdir -p /root/workspace/
-          cd /root/artifact
+          cd /home/artifact
 
           7z x $APP_PACKAGE -o./package
           BINARY_PATH=$(find ./package -name "$BINARY_NAME" -print -quit)
