@@ -85,15 +85,27 @@ jobs:
           docker exec idap ./idat -B -L"/dev/stdout" ./picture_decoder | tee /home/runner/workspace/output.log
 
       - name: Clean up
+        env:
+          APP_PACKAGE: ${{ env.APP_PACKAGE }}
+          VERSION: ${{ env.VERSION }}
         run: |
-          # rm /home/runner/workspace/UnityFramework
-          
-          # cp -r /home/runner/workspace /home/workspace
-          # chmod -R 777 /home/workspace
           7z a /home/runner/analysis.zip /home/runner/workspace/.
           mv /home/runner/analysis.zip /home/runner/release/
 
           ls /home/runner/release/
+
+          echo "xor: `123`" > /home/runner/release_notes.md
+
+          if [[ "$APP_PACKAGE" == *.apk ]]; then
+            PLATFORM="android"
+          elif [[ "$APP_PACKAGE" == *.ipa ]]; then
+            PLATFORM="ios"
+          else
+            PLATFORM="unknown"
+          fi
+
+          RELEASE_TAG="${VERSION}_${PLATFORM}"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -104,8 +116,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Test
-          tag_name: v6.2.0_ios
+          name: ${{ env.RELEASE_TAG }}
+          tag_name: v${{ env.RELEASE_TAG }}
+          body_path: /home/runner/release_notes.md
           files: |
             /home/runner/release/*
           # generate_release_notes: true
