@@ -82,7 +82,7 @@ jobs:
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
           
-          docker exec idap ./idat -B -L"/dev/stdout" ./picture_decoder | tee /home/runner/workspace/output.log
+          docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/runner/workspace/output.log
 
       - name: Clean up
         env:
@@ -94,18 +94,23 @@ jobs:
 
           ls /home/runner/release/
 
-          echo "xor: `123`" > /home/runner/release_notes.md
+          echo "metadata: tba" > /home/runner/release_notes.md
 
           if [[ "$APP_PACKAGE" == *.apk ]]; then
             PLATFORM="android"
+            TITLE="Android"
           elif [[ "$APP_PACKAGE" == *.ipa ]]; then
             PLATFORM="ios"
+            TITLE="iOS"
           else
             PLATFORM="unknown"
+            TITLE="Unknown"
           fi
 
-          RELEASE_TAG="${VERSION}_${PLATFORM}"
+          RELEASE_TAG="v${VERSION}_${PLATFORM}"
+          RELEASE_TITLE="${VERSION} ${TITLE}"
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "RELEASE_TITLE=$RELEASE_TITLE" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -116,8 +121,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ env.RELEASE_TAG }}
-          tag_name: v${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TITLE }}
+          tag_name: ${{ env.RELEASE_TAG }}
           body_path: /home/runner/release_notes.md
           files: |
             /home/runner/release/*
