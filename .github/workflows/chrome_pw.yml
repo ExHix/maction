@@ -217,15 +217,27 @@ jobs:
               
               free_dl_path = ""
               try:
-                  free_dl_path = dl_page_details[dl_page_details.index("gofile.io") - 3]
-              except IndexError:
-                  # fallback
-                  print("[!] Fallback: scanning for valid download path...")
-                  for e in dl_page_details:
-                      if not (isinstance(e, str) and len(e) == 21):
+                  domain = None
+                  for obj in dl_page_details[::-1]:
+                      if not(isinstance(obj, str) and len(obj.split(".")) >= 2):
                           continue
-                      free_dl_path = e
+                      domain = obj
                       break
+
+                  free_dl_path = dl_page_details[dl_page_details.index(domain) - 3]
+              except (IndexError, ValueError):
+                  try:
+                      # fallback
+                      print("[!] Fallback: scanning for valid download path...")
+                      for e in dl_page_details:
+                          if not (isinstance(e, str) and len(e) == 21):
+                              continue
+                          free_dl_path = e
+                          break
+                  except:
+                      print("[!] Unable determine download path")
+                      print(dl_page_details)
+                      exit(1)
               
               # goto download page
               if not free_dl_path:
