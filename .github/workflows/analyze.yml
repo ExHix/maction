@@ -81,7 +81,7 @@ jobs:
             tail -f /dev/null
           
           echo 'docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log'
-          docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log
+          docker exec idap ./idat -B -L"/dev/stdout" ./picture_decoder | tee /home/workspace/output.log
 
           echo "Finished"
           sudo chmod -R 777 /home/runner/workspace 
