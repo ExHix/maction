@@ -10,6 +10,10 @@ on:
         required: false
         default: false
         type: boolean
+      run_analyze:
+        required: false
+        default: true
+        type: boolean
 
 
 jobs:
@@ -353,6 +357,7 @@ jobs:
   
   call_analyze:
     needs: scrape
+    if: ${{ inputs.run_analyze == true }}
     uses: ./.github/workflows/analyze.yml
     with:
       artifact_name: download_ipa
