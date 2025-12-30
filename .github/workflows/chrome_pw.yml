@@ -7,23 +7,19 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 增加 --shm-size 防止 Chrome 崩溃 (Chrome 对内存共享要求很高)
       options: --privileged --shm-size=2gb
     
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. 安装基础环境 + XFCE4 + Chrome
-      - name: Install System & Desktop (XFCE4) & Chrome
+      - name: Install Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          # 安装基础工具 (添加了 python3-pip)
-          apt-get install -y wget curl git net-tools sudo vim unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
+          apt-get install -y wget curl git net-tools sudo unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
           
-          # === 以下保持不变 ===
           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           apt-get install -y ./google-chrome-stable_current_amd64.deb
           rm google-chrome-stable_current_amd64.deb
@@ -36,58 +32,19 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
 
-          # 安装 DrissionPage
-          pip3 install playwright tf-playwright-stealth
+          pip3 install playwright tf-playwright-stealth numpy cbor2
           playwright install-deps chromium
 
-      # 2. 创建用户 & 配置 Chrome 反爬策略
-      - name: Setup User & Chrome Preferences
+
+      - name: Setup User
         run: |
           useradd -m -s /bin/bash appuser
           echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
           
-          # 创建目录
           su appuser -c "mkdir -p /home/appuser/Downloads"
           su appuser -c "mkdir -p /home/appuser/Desktop"
-          
-          # === Chrome 核心配置 ===
-          # 创建 Chrome 默认配置目录
-          CONFIG_DIR="/home/appuser/.config/google-chrome/Default"
-          su appuser -c "mkdir -p $CONFIG_DIR"
-          
-          # 写入 Preferences 文件 (JSON格式)
-          # 1. 设置下载目录并禁止弹窗
-          # 2. 禁用凭证服务
-          # 3. 允许弹出窗口 (防止下载被拦截)
-          su appuser -c "cat <<EOF > $CONFIG_DIR/Preferences
-          {
-            \"download\": {
-              \"default_directory\": \"/home/appuser/Downloads\",
-              \"prompt_for_download\": false,
-              \"directory_upgrade\": true
-            },
-            \"savefile\": {
-              \"default_directory\": \"/home/appuser/Downloads\"
-            },
-            \"profile\": {
-              \"default_content_settings\": {
-                \"popups\": 1,
-                \"notifications\": 1
-              },
-              \"content_settings\": {
-                \"exceptions\": {
-                  \"automatic_downloads\": {
-                    \"https://decrypt.day,*\": { \"setting\": 1 }
-                  }
-                }
-              }
-            },
-            \"credentials_enable_service\": false,
-            \"password_manager_enabled\": false
-          }
-          EOF"
 
-      # 3. 启动 XFCE 桌面
+
       - name: Start XFCE Desktop
         run: |
           service dbus start || true
@@ -110,10 +67,9 @@ jobs:
           sleep 5
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
-      # 4. 启动 Chrome (通过 Playwright 自动化) & Cloudflare Tunnel
+
       - name: Cloudflare Tunnel
         run: |
-          # Cloudflare Tunnel
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
           cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
@@ -135,42 +91,38 @@ jobs:
       
       - name: Launch Chrome
         run: |
-        
           cat <<'EOF' > /home/appuser/get_ipa.py
+          import time
+          import os
+          import json
+          import re
+          
           from playwright.sync_api import sync_playwright
           from playwright_stealth import stealth_sync
-          import playwright.sync_api
-          import time
-          import os, json
-
-          # \u5b9a\u4e49\u914d\u7f6e\u8def\u5f84\uff08\u4e0e\u4e4b\u524d Shell \u811a\u672c\u4fdd\u6301\u4e00\u81f4\uff09
+          import cbor2
+          
+          
           USER_DATA_DIR = '/home/appuser/.config/google-chrome'
           EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
           base_url = "https://decrypt.day/app/id1489932710"
-
-          ENABLE_DEBUG_PAUSE = False
-          def debug_pause(msg: str):
-              global ENABLE_DEBUG_PAUSE
-              if not ENABLE_DEBUG_PAUSE:
-                  return
-              
-              input(f"[DEBUG PAUSE] {msg}")
-
+          
+          def cbor_to_list(b: bytes):
+              hex_str = b.hex()
+              return [int(hex_str[i:i+2], 16) for i in range(0, len(hex_str), 2)]
+          
           with sync_playwright() as p:
-              print("\U0001f680 \u6b63\u5728\u542f\u52a8 Playwright (System Chrome)...")
+              print("[-] Setup Chrome")
               
-              # \u4f7f\u7528 launch_persistent_context \u4ee5\u4fdd\u6301 UserDataDir \u548c\u914d\u7f6e
+              # pr launch_persistent_context
               browser = p.chromium.launch(
                   #user_data_dir=USER_DATA_DIR,
                   executable_path=EXECUTABLE_PATH,
-                  headless=False,  # \u5fc5\u987b\u4e3a False \u624d\u80fd\u5728 VNC \u770b\u5230
-                  #viewport=None,   # \u7981\u7528\u9ed8\u8ba4\u89c6\u53e3\u5927\u5c0f\uff0c\u8ddf\u968f\u7a97\u53e3
+                  headless=False,
                   args=[
                       '--no-sandbox',
                       '--disable-gpu',
-                      # === \u6838\u5fc3\u53cd\u722c\u53c2\u6570 ===
-                      # '--disable-blink-features=AutomationControlled', 
-                      # '--start-maximized',
+                      '--disable-blink-features=AutomationControlled', 
+                      '--start-maximized',
                       # '--no-first-run',
                       # '--no-default-browser-check',
                       # '--disable-dev-shm-usage',
@@ -178,74 +130,56 @@ jobs:
                   ignore_default_args=["--enable-automation"],
               )
               
-              # \u83b7\u53d6\u9ed8\u8ba4\u9875\u9762\u6216\u65b0\u5efa\u9875\u9762
-              # print("New pages...")
-              # page = browser.new_page()
-              
-              # # === \u989d\u5916\u53cd\u722c\u63aa\u65bd\uff1a\u79fb\u9664 navigator.webdriver \u5c5e\u6027 ===
-              # # DrissionPage \u9ed8\u8ba4\u4f1a\u81ea\u52a8\u5904\u7406\u8fd9\u4e2a\uff0cPlaywright \u9700\u8981\u624b\u52a8\u6ce8\u5165
-              # page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-              
-              # print("\U0001f517 \u6b63\u5728\u8bbf\u95ee\u76ee\u6807\u9875\u9762...")
-              # try:
-              #     page.goto('https://decrypt.day/app/id1489932710', timeout=60000)
-              #     print("\u2705 \u9875\u9762\u52a0\u8f7d\u5b8c\u6210")
-              # except Exception as e:
-              #     print(f"\u26a0\ufe0f \u9875\u9762\u52a0\u8f7d\u53ef\u80fd\u8d85\u65f6: {e}")
-
-              # # \u4fdd\u6301\u8fd0\u884c\uff0c\u7b49\u5f85 VNC \u67e5\u770b\u6216\u540e\u7eed\u64cd\u4f5c
-              # while True:
-              #     time.sleep(10)
-              context = browser.new_context(
-                      #user_agent=user_agent,
-                      #viewport={"width": 1280, "height": 800},
-                      #locale="zh-CN",
-                      #timezone_id="Asia/Shanghai"
-                  )
+              print("Setup context")
+              context = browser.new_context()
               context.add_init_script("""
                   Object.defineProperty(navigator, 'webdriver', {
                       get: () => undefined
                   });
               """)
-
-              # Open info page
+          
+              print("[-] Open app info page")
               page = context.new_page()
+              stealth_sync(page)
               page.goto(base_url, timeout=60000)
-
+          
               page.wait_for_load_state("domcontentloaded")
               
               if "Just a moment" in page.title() or "Cloudflare" in page.title() or "cf" in page.url:
-                  print("\n" + "="*50)
-                  print("[!] ??? Cloudflare ?????")
-                  print("[!] ????? Firefox ??????????")
-                  print("[!] ????????????????????????...")
-                  print("="*50 + "\n")
-                  # input(">>> ???????????????...")
-              else:
-                  print("[-] ?????????????...")
-
-              page.wait_for_load_state("domcontentloaded")
-
+                  time.sleep(20)
+                  if "Just a moment" in page.title() or "Cloudflare" in page.title() or "cf" in page.url:
+                      print("[x] Warning: Cloudflare blocked us. Quit.")
+                      exit(1)
               
-              debug_pause(">>> ?????? POST ??...")
-
+              page.wait_for_load_state("domcontentloaded")
+          
+          
               # fetch download link via JS fetch
+              payload = cbor2.dumps({
+                  "appId": "cl9se40tq00abdofwqtgov0zs",
+                  "version": "6.1.0",
+                  "isPremier": cbor2.undefined,
+              })
+              payload_text = ",".join(map(str,cbor_to_list(payload)))
+          
               result = page.evaluate("""
                   async () => {
                       const formData = new FormData();
-                      formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
-
+                      formData.append('data', '$REQUEST_PAYLOAD$');
+          
                       const resp = await fetch('$BASE_PAGE_URL$?/files', {
                           method: 'POST',
                           body: formData,
                       });
                       return await resp.text();
-                  }
-              """.replace("$BASE_PAGE_URL$", base_url))
+                  }"""
+                  .replace("$BASE_PAGE_URL$", base_url)
+                  .replace("$REQUEST_PAYLOAD$", payload_text)
+              )
               # print(type(result))
               # print(result)
               assert isinstance(result, str), f"Invalid response type: {type(result)}"
-
+          
               try:
                   download_page_req = json.loads(result)
                   assert download_page_req.get("type") == "success", f"Failed when request download path: {download_page_req}"
@@ -268,106 +202,65 @@ jobs:
               # goto download page
               if not free_dl_path:
                   raise ValueError(f"Cannot get download page path. Request: {download_page_req}")
-
+          
               download_page_url = f"{base_url}/dl/{free_dl_path}"
               print(f"[-] Download Page: {download_page_url}")
-
+          
               dl_page = context.new_page()
+              stealth_sync(dl_page)
               dl_page.goto(download_page_url, referer=base_url)
-
+          
               btn = dl_page.locator("button.btn-download").filter(has_text="Get download link")
-
               btn.click()
-              # btn.scroll_into_view_if_needed()
-              # box = btn.bounding_box()
-              # assert box is not None, "No box found"
-
-              # center_x = box["x"] + box["width"] / 2
-              # center_y = box["y"] + box["height"] / 2
-              # dl_page.mouse.move(center_x, center_y)
-              # dl_page.mouse.click(center_x, center_y)
-
-              print("??????...")
-              time.sleep(5)
-
-              # click button
-              # def handle_response(response: playwright.sync_api.Response):
-              #     if "https://decrypt.day/" in response.url and response.request.method == "POST":
-              #         print(f"\n[?????]: {response.url}")
-              #         try:
-              #             # ??????????? JSON?
-              #             data = response.json()
-              #             print(f"[????]: {json.dumps(data, indent=2, ensure_ascii=False)}")
-              #         except Exception:
-              #             print("[???? JSON ??]")
-
-              # # ????
-              # dl_page.on("response", handle_response)
-              
-              time.sleep(5)
-
-              print("????...")
-              btn = dl_page.locator("button.btn-download")#.filter(has_text="Download")
-              
+             
+              print("[-] Trying to fetch download link")
+              time.sleep(10)
+          
+              btn = dl_page.locator("button.btn-download").filter(has_text="Download")
+              print("[-] Preparing download")
+          
               with dl_page.expect_download() as download_info:
                   btn.click()
-
+          
               download = download_info.value
-
-              # 3. 指定你想要的下载路径
-              # 比如你想下载到 /home/appuser/Downloads 并保留原始文件名
-              import re
-              regex = r'\d+\.\d+\.\d+'
-
-              match = re.search(regex, download.suggested_filename)
+              semantic_version = r'\d+\.\d+\.\d+'
+              match = re.search(semantic_version, download.suggested_filename)
               if match:
                   version = match.group()
-                  print(f"提取结果: {version}")
+                  print(f"[-] Version: {version}")
               else:
                   version = f"unknown_{download.suggested_filename}"
-
+                  print(f"[!] Unable find semantic version: {version}")
+          
               download_path = os.path.join("/home/appuser/Downloads", f"{version}.ipa")
-    
-              # 4. 执行保存操作
               download.save_as(download_path)
-
-              print(f"✅ 文件已成功保存至: {download_path}")
-
-              debug_pause(">>> ?????????...")
-
-              print("[Script] \u6d4f\u89c8\u5668\u4fdd\u6301\u5f00\u542f\uff0c\u7b49\u5f85 Action \u7ed3\u675f...")
-              
-              time.sleep(5)
-              print("Exited")
+              print(f"[-] File saved at: {download_path}")
+              print("[-] Exited")
 
           EOF
-
-          chown appuser:appuser /home/appuser/get_ipa.py
-          chmod +x /home/appuser/get_ipa.py
-
-          touch /home/appuser/bot.log
-          chmod 666 /home/appuser/bot.log
 
           cat <<EOF > /home/appuser/run_bot.sh
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
           export LIBGL_ALWAYS_SOFTWARE=1
-          
+              
           #nohup python3 -u /home/appuser/get_ipa.py > /home/appuser/bot.log 2>&1 &
           python3 -u /home/appuser/get_ipa.py
           EOF
           
           echo "🤖 Script running..."
+          chown appuser:appuser /home/appuser/get_ipa.py
+          chmod +x /home/appuser/get_ipa.py
 
-
+          touch /home/appuser/bot.log
+          chmod 666 /home/appuser/bot.log
           chmod +x /home/appuser/run_bot.sh
+          
           su appuser -c "/home/appuser/run_bot.sh"
           
-          
-      # 5. 监控下载 (逻辑不变)
-      - name: Monitor Download (Wait for IPA)
-        timeout-minutes: 30
+      - name: Monitor Download
+        timeout-minutes: 10
         run: |
           TARGET_DIR="/home/appuser/Downloads"
           MAX_SIZE_MB=100
@@ -375,20 +268,16 @@ jobs:
           echo "Starting monitoring loop in $TARGET_DIR"
           
           while true; do
-            # Chrome 下载临时文件通常是 .crdownload
             FILE=$(find "$TARGET_DIR" -name "*.ipa" -print -quit)
             
             if [ -n "$FILE" ]; then
               BASENAME=$(basename "$FILE")
               
-              # 检查 Chrome 的临时文件后缀
               if [ -f "${FILE}.crdownload" ]; then
                  echo "⏳ Downloading (crdownload present): $BASENAME..."
               else
-                 # 双重检查文件大小变化，确保下载完成
                  SIZE_MB=$(du -m "$FILE" | cut -f1)
                  
-                 # 简单的防误判：如果文件太小，可能还没开始写真正的数据
                  if [ "$SIZE_MB" -le "$MAX_SIZE_MB" ]; then
                    echo "⚠️ Found $BASENAME ($SIZE_MB MB), waiting for full file..."
                  else
@@ -404,9 +293,8 @@ jobs:
           
           echo "Download confirmed."
 
-      # 6. 上传产物
-      - name: Upload IPA Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: decrypted-app
+          name: download_ipa
           path: /home/appuser/Downloads/*.ipa
