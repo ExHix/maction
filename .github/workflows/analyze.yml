@@ -51,7 +51,7 @@ jobs:
 
           7z x $APP_PACKAGE -o./package
           BINARY_PATH=$(find ./package -name "$BINARY_NAME" -print -quit)
-          cp $BINARY_PATH /home/runner/workspace/$BINARY_NAME
+          cp $BINARY_PATH /home/runner/workspace/
 
           
       - name: Analyze
