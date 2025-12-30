@@ -36,6 +36,9 @@ jobs:
           ls -R
           APP_PACKAGE=$(find . -type f \( -name "*.ipa" -o -name "*.apk" \) | head -n 1)
           VERSION=$(echo $APP_PACKAGE | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
+          
+          echo "APP_PACKAGE=$APP_PACKAGE, VERSION=$VERSION"
+        
           echo "APP_PACKAGE=$APP_PACKAGE" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
     
