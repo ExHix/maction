@@ -1,6 +1,11 @@
 name: Chrome XFCE Desktop VNC (Auto)
 on: 
   workflow_dispatch:
+    inputs:
+      app_version:
+        description: 'App Version'
+        required: true
+        type: string
 
 jobs:
   chrome-user:
@@ -90,6 +95,8 @@ jobs:
           echo "=========================================================="
       
       - name: Launch Chrome
+        env:
+          MY_INPUT_VAL: ${{ github.event.inputs.app_version }}
         run: |
           cat <<'EOF' > /home/appuser/get_ipa.py
           import time
@@ -98,9 +105,10 @@ jobs:
           import re
 
           from playwright.sync_api import sync_playwright
-          from playwright_stealth import stealth_sync
+          # from playwright_stealth import stealth_sync
           import cbor2
 
+          version = os.environ.get('TARGET_APP_VERSION')
 
           USER_DATA_DIR = '/home/appuser/.config/google-chrome'
           EXECUTABLE_PATH = '/usr/bin/google-chrome-stable'
@@ -157,7 +165,7 @@ jobs:
               # fetch download link via JS fetch
               payload = cbor2.dumps({
                   "appId": "cl9se40tq00abdofwqtgov0zs",
-                  "version": "6.2.0",
+                  "version": version,
                   "isPremier": cbor2.undefined,
               })
               payload_text = ",".join(map(str,cbor_to_list(payload)))
@@ -165,7 +173,7 @@ jobs:
               result = page.evaluate("""
                   async () => {
                       const formData = new FormData();
-                      formData.append('data', '163,101,97,112,112,73,100,120,25,99,108,57,115,101,52,48,116,113,48,48,97,98,100,111,102,119,113,116,103,111,118,48,122,115,103,118,101,114,115,105,111,110,101,54,46,50,46,48,105,105,115,80,114,101,109,105,101,114,247');
+                      formData.append('data', '$PAYLOAD$');
 
                       const resp = await fetch('$BASE_PAGE_URL$?/files', {
                           method: 'POST',
@@ -173,7 +181,10 @@ jobs:
                       });
                       return await resp.text();
                   }
-              """.replace("$BASE_PAGE_URL$", base_url))
+              """
+                  .replace("$BASE_PAGE_URL$", base_url)
+                  .replace("$PAYLOAD$", payload_text)
+              )
               # print(type(result))
               # print(result)
               assert isinstance(result, str), f"Invalid response type: {type(result)}"
