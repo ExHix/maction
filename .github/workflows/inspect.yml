@@ -1,4 +1,4 @@
-name: Analyze
+name: Root Execution Workflow
 
 on:
   workflow_dispatch:
