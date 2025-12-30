@@ -51,7 +51,7 @@ jobs:
 
           7z x $APP_PACKAGE -o./package
           BINARY_PATH=$(find ./package -name "$BINARY_NAME" -print -quit)
-          cp $BINARY_PATH /root/workspace/$BINARY_NAME
+          cp $BINARY_PATH /home/runner/workspace/$BINARY_NAME
 
           
       - name: Analyze
@@ -68,20 +68,21 @@ jobs:
           echo "Pulling Finished"
           
           docker run -d --name idap --network none \
-            -v /root/workspace:/root/workspace \
+            -v /home/runner/workspace:/home/runner/workspace \
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
-          docker exec idap ./idat -B -L"/dev/stdout" /root/workspace/$BINARY_NAME | tee /root/workspace/output.log
+          docker exec idap ./idat -B -L"/dev/stdout" /home/runner/workspace/$BINARY_NAME | tee /home/runner/workspace/output.log
 
       - name: Clean up
         run: |
-          # rm /root/workspace/UnityFramework
+          # rm /home/runner/workspace/UnityFramework
           
-          cp -r /root/workspace /home/workspace
-          chmod -R 777 /home/workspace
+          # cp -r /home/runner/workspace /home/workspace
+          # chmod -R 777 /home/workspace
+          echo "Finished"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: analysis
-          path: /home/workspace
+          path: /home/runner/workspace
