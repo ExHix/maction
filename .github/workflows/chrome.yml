@@ -1,4 +1,4 @@
-name: Chrome XFCE Desktop VNC
+name: Fetch IPA Package (Mannual)
 on: 
   workflow_dispatch:
 
@@ -7,7 +7,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
-      # 增加 --shm-size 防止 Chrome 崩溃 (Chrome 对内存共享要求很高)
       options: --privileged --shm-size=2gb
     
     steps:
@@ -131,14 +130,6 @@ jobs:
           #!/bin/bash
           export DISPLAY=:99
           export HOME=/home/appuser
-          
-          # === Chrome 启动参数详解 ===
-          # --no-first-run: 不显示首次运行向导
-          # --no-default-browser-check: 不检查默认浏览器
-          # --disable-infobars: 隐藏"Chrome正在受自动化控制"
-          # --disable-blink-features=AutomationControlled: 核心反爬，隐藏 navigator.webdriver
-          # --start-maximized: 最大化窗口，看起来像真人在用
-          # --user-data-dir: 指定配置目录，确保读取到上面的 Preferences
           
           nohup google-chrome-stable \\
             --no-first-run \\

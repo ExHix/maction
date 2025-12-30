@@ -1,4 +1,4 @@
-name: Repack XAPK and Clean Manifest
+name: XAPK to APK
 
 on:
   workflow_dispatch: 

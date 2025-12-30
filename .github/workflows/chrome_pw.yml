@@ -1,4 +1,4 @@
-name: Chrome XFCE Desktop VNC (Auto)
+name: Fetch IPA Package
 on: 
   workflow_dispatch:
     inputs:
