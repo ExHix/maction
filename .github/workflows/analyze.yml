@@ -79,10 +79,12 @@ jobs:
             -v /home/runner/workspace:/home/workspace \
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
-          docker exec idap sh -c './idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log'
+          
+          echo 'docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log'
+          docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log
 
           echo "Finished"
-          chmod -R 777 /home/runner/workspace 
+          sudo chmod -R 777 /home/runner/workspace 
 
       - name: Clean up
         run: |
