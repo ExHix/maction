@@ -31,17 +31,17 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: artifact
       - run: |
-          mkdir -p /tmp/package
+          mkdir -p /home/runner/package
           cd artifact
           ls
           pwd
           echo "emmmm"
-          cp -r . /tmp/package
-          ls /tmp/package
+          cp -r . /home/runner/package
+          ls /home/runner/package
 
           APP_PACKAGE=$(find . -type f \( -name "*.ipa" -o -name "*.apk" \) | head -n 1)
           VERSION=$(echo $APP_PACKAGE | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
-          RELEASE_PACKAGE=$(readlink -m "/tmp/package/artifact/$APP_PACKAGE")
+          RELEASE_PACKAGE=$(readlink -m "/home/runner/package/artifact/$APP_PACKAGE")
 
           echo "APP_PACKAGE=$APP_PACKAGE, VERSION=$VERSION"
           
@@ -54,7 +54,7 @@ jobs:
           APP_PACKAGE: ${{ env.APP_PACKAGE }}
           BINARY_NAME: ${{ inputs.binary_name }}
         run: |
-          cd /tmp/package
+          cd /home/runner/package
           ls
 
           7z x $APP_PACKAGE -o./package
@@ -96,7 +96,11 @@ jobs:
           # cp -r /home/runner/workspace /home/workspace
           # chmod -R 777 /home/workspace
           7z a /home/runner/analysis.zip /home/runner/workspace/.
+          ls /home/runner/package
+          
           echo "Finished"
+
+          ls /home/runner/workspace
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
