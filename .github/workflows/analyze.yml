@@ -51,6 +51,9 @@ jobs:
 
           7z x $APP_PACKAGE -o./package
           BINARY_PATH=$(find ./package -name "$BINARY_NAME" -print -quit)
+          
+          echo "Target binary: $BINARY_PATH"
+          mkdir -r /home/runner/workspace
           cp $BINARY_PATH /home/runner/workspace/
 
           
@@ -68,10 +71,10 @@ jobs:
           echo "Pulling Finished"
           
           docker run -d --name idap --network none \
-            -v /home/runner/workspace:/home/runner/workspace \
+            -v /home/runner/workspace:/home/workspace \
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
-          docker exec idap ./idat -B -L"/dev/stdout" /home/runner/workspace/$BINARY_NAME | tee /home/runner/workspace/output.log
+          docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log
 
       - name: Clean up
         run: |
