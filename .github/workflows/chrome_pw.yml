@@ -356,6 +356,9 @@ jobs:
           path: /home/appuser/Downloads/*.ipa
   
   call_analyze:
+    permissions:
+      contents: write
+
     needs: scrape
     if: ${{ inputs.run_analyze == true }}
     uses: ./.github/workflows/analyze.yml
