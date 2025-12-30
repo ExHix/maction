@@ -15,6 +15,8 @@ on:
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -35,11 +37,13 @@ jobs:
 
           APP_PACKAGE=$(find . -type f \( -name "*.ipa" -o -name "*.apk" \) | head -n 1)
           VERSION=$(echo $APP_PACKAGE | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
-          
+          RELEASE_PACKAGE=$(readlink -m "/tmp/package/artifact/$APP_PACKAGE")
+
           echo "APP_PACKAGE=$APP_PACKAGE, VERSION=$VERSION"
           
-          echo "APP_PACKAGE=$APP_PACKAGE" >> "$GITHUB_ENV"
+          echo "APP_PACKAGE=$APP_PACKAGE" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "RELEASE_PACKAGE=$RELEASE_PACKAGE" >> $GITHUB_ENV
     
       - name: Setup
         env:
@@ -82,6 +86,7 @@ jobs:
           
           # cp -r /home/runner/workspace /home/workspace
           # chmod -R 777 /home/workspace
+          7z a /home/runner/analysis.zip /home/runner/workspace/.
           echo "Finished"
 
       - name: Upload Artifact
@@ -89,3 +94,15 @@ jobs:
         with:
           name: analysis
           path: /home/runner/workspace
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Test
+          tag_name: v6.2.0_ios
+          files: |
+            ${{ env.RELEASE_PACKAGE }}
+            /home/runner/analysis.zip
+          # generate_release_notes: true
+          # draft: false # 是否设为草稿
+          # prerelease: false # 是否设为预发布
