@@ -85,9 +85,17 @@ jobs:
           ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
           chmod -R 777 /opt/noVNC
           pip3 install numpy
-
+ 
+          cat <<EOF > /home/appuser/run_novnc.sh
+          #!/bin/bash
+          export DISPLAY=:99
+          export HOME=/home/appuser
           x11vnc -display :99 -forever -bg -noxdamage
           /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+          EOF
+          
+          chmod +x /home/appuser/run_novnc.sh
+          su appuser -c "/home/appuser/run_novnc.sh"
 
       - name: Cloudflare Tunnel
         env:
