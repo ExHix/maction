@@ -64,7 +64,6 @@ jobs:
       - name: Analyze
         env:
           BINARY_NAME: ${{ inputs.binary_name }}
-        shell: sudo bash {0}
         run: |
           # echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
@@ -80,7 +79,7 @@ jobs:
             -v /home/runner/workspace:/home/workspace \
             -w /opt/ida $IMAGE_URL \
             tail -f /dev/null
-          docker exec idap ./idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log
+          docker exec idap sh -c './idat -B -L"/dev/stdout" /home/workspace/$BINARY_NAME | tee /home/workspace/output.log'
 
           echo "Finished"
           chmod -R 777 /home/runner/workspace 
