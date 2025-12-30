@@ -6,6 +6,11 @@ on:
         description: 'App Version'
         required: true
         type: string
+      enable_vnc:
+        required: false
+        default: false
+        type: boolean
+
 
 jobs:
   chrome-user:
@@ -21,6 +26,7 @@ jobs:
       - name: Install Environment
         env:
           DEBIAN_FRONTEND: noninteractive
+          ENABLE_VNC: ${{ github.event.inputs.enable_vnc }}
         run: |
           apt-get update
           apt-get install -y wget curl git net-tools sudo unzip xz-utils libgbm1 libnss3 libasound2 python3-pip
@@ -32,15 +38,11 @@ jobs:
           apt-get install -y xvfb x11vnc python3 pulseaudio dbus-x11 xfce4 xfce4-goodies xfce4-terminal
           echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections
           fc-cache -f -v
-          git clone https://github.com/novnc/noVNC.git /opt/noVNC
-          git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
-          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
-          chmod -R 777 /opt/noVNC
-
-          pip3 install playwright tf-playwright-stealth numpy cbor2
+          
+          pip3 install playwright cbor2 #tf-playwright-stealth 
           playwright install-deps chromium
 
-
+          
       - name: Setup User
         run: |
           useradd -m -s /bin/bash appuser
@@ -51,6 +53,8 @@ jobs:
 
 
       - name: Start XFCE Desktop
+        env:
+          ENABLE_VNC: ${{ github.event.inputs.enable_vnc }}
         run: |
           service dbus start || true
   
@@ -62,8 +66,6 @@ jobs:
           sleep 2
           export XFCE_PANEL_MIGRATE_DEFAULT=true
           startxfce4 &
-          x11vnc -display :99 -forever -bg -noxdamage
-          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
           EOF
           
           chmod +x /home/appuser/run_desktop.sh
@@ -72,8 +74,25 @@ jobs:
           sleep 5
           su appuser -c "export DISPLAY=:99; xset s off; xset -dpms; xset s noblank"
 
+      - name: Setup noVNC
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          ENABLE_VNC: ${{ github.event.inputs.enable_vnc }}
+        if: env.ENABLE_VNC == 'true'
+        run: |
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
+          ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
+          chmod -R 777 /opt/noVNC
+          pip3 install numpy
+
+          x11vnc -display :99 -forever -bg -noxdamage
+          /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 
       - name: Cloudflare Tunnel
+        env:
+          ENABLE_VNC: ${{ github.event.inputs.enable_vnc }}
+        if: env.ENABLE_VNC == 'true'
         run: |
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           dpkg -i cloudflared.deb
