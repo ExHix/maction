@@ -115,7 +115,7 @@ jobs:
       
       - name: Launch Chrome
         env:
-          MY_INPUT_VAL: ${{ github.event.inputs.app_version }}
+          TARGET_APP_VERSION: ${{ github.event.inputs.app_version }}
         run: |
           cat <<'EOF' > /home/appuser/get_ipa.py
           import time
@@ -338,3 +338,4 @@ jobs:
         with:
           name: download_ipa
           path: /home/appuser/Downloads/*.ipa
+
